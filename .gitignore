@@ -1,0 +1,38 @@
+## .NET
+*.log
+*.tmp
+*.swp
+*.user
+*.suo
+*.sln.cache
+*.cache
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+bld/
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+*.nuget
+*.nupkg
+*.suo
+*.user
+.vs/
+
+## IDE
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.iml
+*.hprof
+
+## OS
+.DS_Store
+Thumbs.db
+
+## Environment
+*.env
+.env.*
