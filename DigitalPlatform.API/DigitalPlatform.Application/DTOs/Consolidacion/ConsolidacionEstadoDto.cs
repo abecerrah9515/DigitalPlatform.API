@@ -10,5 +10,14 @@ public class ConsolidacionEstadoDto
     public int RegistrosFallidos { get; set; }
     public DateTime FechaInicio { get; set; }
     public DateTime? FechaFin { get; set; }
+    public List<FuenteEstadoDto> Fuentes { get; set; } = [];
     public List<string> Errores { get; set; } = [];
+}
+
+public class FuenteEstadoDto
+{
+    public string Archivo { get; set; } = string.Empty; // GR55, Horas, Planeacion, TDC, MaestroReferencias
+    public string Estado { get; set; } = string.Empty;  // Exitoso, Fallido, Pendiente
+    public int RegistrosProcesados { get; set; }
+    public string? Error { get; set; }
 }
