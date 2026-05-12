@@ -13,7 +13,7 @@ builder.Services.AddScoped<IGR55Parser, GR55Parser>();
 builder.Services.AddScoped<IHorasParser, HorasParser>();
 builder.Services.AddScoped<IPlaneacionParser, PlaneacionParser>();
 builder.Services.AddScoped<ITipoCambioParser, TipoCambioParser>();
-// builder.Services.AddScoped<IMaestroReferenciasParser, MaestroReferenciasParser>(); // Task 29 - pendiente
+builder.Services.AddScoped<IMaestroReferenciasParser, MaestroReferenciasParser>();
 
 // Services (Juan: implementar en Infrastructure/Services/)
 // builder.Services.AddScoped<IConsolidacionService, ConsolidacionService>(); // Task 10
