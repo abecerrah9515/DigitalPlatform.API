@@ -10,6 +10,6 @@ public class RegistroGR55Dto
     public string ElementoPEP { get; set; } = string.Empty;
     public string CentroBeneficio { get; set; } = string.Empty;
     public string Texto { get; set; } = string.Empty;
-    public decimal EnMonedaTransaccion { get; set; }
-    public string ClaveMonedaMT { get; set; } = string.Empty;
+    public decimal ValorMonedaLocalCeBe { get; set; } // Columna P - signo invertido
+    public string ClaveMonedaLocalCeBe { get; set; } = string.Empty;
 }
