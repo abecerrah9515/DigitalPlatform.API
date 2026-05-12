@@ -2,6 +2,7 @@ using ClosedXML.Excel;
 using DigitalPlatform.Application.DTOs.Fuentes;
 using DigitalPlatform.Application.Interfaces.Parsers;
 using Microsoft.Extensions.Logging;
+using System.Globalization;
 
 namespace DigitalPlatform.Infrastructure.Parsers;
 
@@ -20,9 +21,9 @@ public class TipoCambioParser : ITipoCambioParser
 
         var colMap = ExcelParserHelper.BuildColumnMap(ws.Row(1));
 
-        if (!colMap.TryGetValue("ano", out int colAno) ||
-            !colMap.TryGetValue("mes", out int colMes) ||
-            !colMap.TryGetValue("tarifa", out int colTarifa))
+        if (!colMap.TryGetValue("fecha", out int colFecha) ||
+            !colMap.TryGetValue("t.c. mxn", out int colPeriodo) ||
+            !colMap.TryGetValue("tasas", out int colTasa))
         {
             _logger.LogWarning("TDC: columnas requeridas no encontradas. Columnas encontradas: {Cols}",
                 string.Join(", ", colMap.Keys));
@@ -33,11 +34,32 @@ public class TipoCambioParser : ITipoCambioParser
         {
             try
             {
+                var fechaStr   = ExcelParserHelper.GetString(fila, colFecha);
+                var periodoStr = ExcelParserHelper.GetString(fila, colPeriodo);
+                var tasa       = ExcelParserHelper.GetDecimal(fila, colTasa);
+
+                if (!DateOnly.TryParseExact(fechaStr, "dd.MM.yyyy",
+                        CultureInfo.InvariantCulture, DateTimeStyles.None, out var fecha))
+                {
+                    _logger.LogWarning("TDC fila {Row}: fecha inválida '{Val}', se omite.", fila.RowNumber(), fechaStr);
+                    continue;
+                }
+
+                var partes = periodoStr.Split('/');
+                if (partes.Length != 2 ||
+                    !int.TryParse(partes[0], out int año) ||
+                    !int.TryParse(partes[1], out int mes))
+                {
+                    _logger.LogWarning("TDC fila {Row}: período inválido '{Val}', se omite.", fila.RowNumber(), periodoStr);
+                    continue;
+                }
+
                 resultado.Add(new RegistroTipoCambioDto
                 {
-                    Año    = ExcelParserHelper.GetInt(fila, colAno),
-                    Mes    = ExcelParserHelper.GetInt(fila, colMes),
-                    Tarifa = ExcelParserHelper.GetDecimal(fila, colTarifa),
+                    Fecha = fecha,
+                    Año   = año,
+                    Mes   = mes,
+                    Tasa  = tasa,
                 });
             }
             catch (Exception ex)

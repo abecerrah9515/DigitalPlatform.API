@@ -2,7 +2,8 @@ namespace DigitalPlatform.Application.DTOs.Fuentes;
 
 public class RegistroTipoCambioDto
 {
+    public DateOnly Fecha { get; set; }
     public int Año { get; set; }
     public int Mes { get; set; }
-    public decimal Tarifa { get; set; } // Tasa USD → COP
+    public decimal Tasa { get; set; }
 }
