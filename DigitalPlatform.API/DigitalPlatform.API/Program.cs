@@ -20,7 +20,7 @@ builder.Services.AddScoped<IMaestroReferenciasParser, MaestroReferenciasParser>(
 
 // Services
 builder.Services.AddScoped<IConsolidacionService, ConsolidacionService>();
-// builder.Services.AddScoped<IProyectoService, ProyectoService>();           // Task 16
+builder.Services.AddScoped<IProyectoService, ProyectoService>();
 
 // Permitir archivos grandes en uploads multipart (5 archivos, hasta ~512 MB en total)
 builder.Services.Configure<FormOptions>(o =>

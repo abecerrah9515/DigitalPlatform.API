@@ -107,6 +107,9 @@ public class ConsolidacionService : IConsolidacionService
                 _maestroParser.ParsearAsync, "MaestroReferencias", fuentesEstado, warnings)
                 ?? new MaestroReferenciasDto();
 
+            // ── Step 2b: persistir tasas COP y USD en TiposCambio ───────────
+            await PersistirTiposCambioAsync(tdcRegistros ?? []);
+
             // ── Step 3: construir lookups desde el Maestro de referencias ────
             // TryAdd en todos los dicts para tolerar duplicados en el maestro (toma el primero)
             var cuentaClasif = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -225,14 +228,14 @@ public class ConsolidacionService : IConsolidacionService
                     if (!string.IsNullOrWhiteSpace(rawCebe) && cebeDict.TryGetValue(rawCebe, out var cebeRef))
                     {
                         cebeNombre = cebeRef.Nombre;
-                        cebeGroup  = cebeRef.CeBeGroup;
+                        cebeGroup  = cebeRef.CeBeGroup; // CeBeGroup IS el nombre display de la vertical
                     }
 
                     // Industria = CodIndustria de la fuente (e.g. "Z01")
                     var industria = p?.Industria ?? string.Empty;
 
-                    // Vertical = nombre legible vía maestro Industrias
-                    industriaDict.TryGetValue(industria, out var vertical);
+                    // Vertical = nombre display (= CeBeGroup); fallback a Planeación.Industria
+                    var vertical = !string.IsNullOrWhiteSpace(cebeGroup) ? cebeGroup : industria;
 
                     // Resolver Area via CeBe → Areas
                     var area = string.Empty;
@@ -387,6 +390,36 @@ public class ConsolidacionService : IConsolidacionService
             Pagina         = pagina,
             TamañoPagina   = tamañoPagina
         });
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // Helper: persistir TiposCambio — COP (del TDC) + USD = 1 para cada período
+    // ════════════════════════════════════════════════════════════════════════
+    private async Task PersistirTiposCambioAsync(List<RegistroTipoCambioDto> registros)
+    {
+        if (registros.Count == 0) return;
+
+        var existentes = await _db.TiposCambio
+            .Where(t => t.Moneda == "COP" || t.Moneda == "USD")
+            .ToDictionaryAsync(t => (t.Año, t.Mes, t.Moneda));
+
+        foreach (var r in registros.Where(r => r.TasaCop > 0))
+        {
+            // Tasa COP (del TDC)
+            if (existentes.TryGetValue((r.Año, r.Mes, "COP"), out var cop))
+                cop.Tasa = r.TasaCop;
+            else
+                _db.TiposCambio.Add(new Domain.Entities.TipoCambio
+                    { Año = r.Año, Mes = r.Mes, Moneda = "COP", Tasa = r.TasaCop });
+
+            // Tasa USD = 1 (valores ya están en USD)
+            if (!existentes.ContainsKey((r.Año, r.Mes, "USD")))
+                _db.TiposCambio.Add(new Domain.Entities.TipoCambio
+                    { Año = r.Año, Mes = r.Mes, Moneda = "USD", Tasa = 1m });
+        }
+
+        await _db.SaveChangesAsync();
+        _logger.LogInformation("ConsolidacionService: TiposCambio persistidos para {N} períodos.", registros.Count);
     }
 
     // ════════════════════════════════════════════════════════════════════════
