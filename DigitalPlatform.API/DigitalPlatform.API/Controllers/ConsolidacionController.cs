@@ -21,8 +21,8 @@ public class ConsolidacionController : ControllerBase
 
     // POST api/consolidacion/upload
     [HttpPost("upload")]
-    [RequestSizeLimit(104_857_600)] // 100 MB
-    [RequestFormLimits(MultipartBodyLengthLimit = 104_857_600)]
+    [RequestSizeLimit(536_870_912)] // 512 MB
+    [RequestFormLimits(MultipartBodyLengthLimit = 536_870_912)]
     public async Task<ActionResult<ApiResponse<ConsolidacionIniciadaDto>>> Upload(
         IFormFile gr55,
         IFormFile horas,

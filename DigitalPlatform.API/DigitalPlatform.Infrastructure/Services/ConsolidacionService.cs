@@ -108,33 +108,26 @@ public class ConsolidacionService : IConsolidacionService
                 ?? new MaestroReferenciasDto();
 
             // ── Step 3: construir lookups desde el Maestro de referencias ────
-            // NumeroCuenta → Clasificacion ("Ingreso" | "Costo")
-            var cuentaClasif = maestro.AccountsGroups
-                .Where(a => !string.IsNullOrWhiteSpace(a.Account))
-                .ToDictionary(a => a.Account.Trim(), a => a.Clasificacion.Trim(),
-                              StringComparer.OrdinalIgnoreCase);
+            // TryAdd en todos los dicts para tolerar duplicados en el maestro (toma el primero)
+            var cuentaClasif = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var a in maestro.AccountsGroups.Where(a => !string.IsNullOrWhiteSpace(a.Account)))
+                cuentaClasif.TryAdd(a.Account.Trim(), a.Clasificacion.Trim());
 
-            // CeBe code → CeBeReferenciaDto (Nombre, CeBeGroup)
-            var cebeDict = maestro.CeBes
-                .Where(c => !string.IsNullOrWhiteSpace(c.CeBe))
-                .ToDictionary(c => c.CeBe.Trim(), c => c, StringComparer.OrdinalIgnoreCase);
+            var cebeDict = new Dictionary<string, CeBeReferenciaDto>(StringComparer.OrdinalIgnoreCase);
+            foreach (var c in maestro.CeBes.Where(c => !string.IsNullOrWhiteSpace(c.CeBe)))
+                cebeDict.TryAdd(c.CeBe.Trim(), c);
 
-            // Sociedad code → SociedadReferenciaDto (RazonSocial, Pais)
-            var sociedadDict = maestro.Sociedades
-                .Where(s => !string.IsNullOrWhiteSpace(s.Sociedad))
-                .ToDictionary(s => s.Sociedad.Trim(), s => s, StringComparer.OrdinalIgnoreCase);
+            var sociedadDict = new Dictionary<string, SociedadReferenciaDto>(StringComparer.OrdinalIgnoreCase);
+            foreach (var s in maestro.Sociedades.Where(s => !string.IsNullOrWhiteSpace(s.Sociedad)))
+                sociedadDict.TryAdd(s.Sociedad.Trim(), s);
 
-            // CodIndustria → Vertical name (e.g. "Z01" → "Banca y finanzas")
-            var industriaDict = maestro.Industrias
-                .Where(i => !string.IsNullOrWhiteSpace(i.CodIndustria))
-                .ToDictionary(i => i.CodIndustria.Trim(), i => i.Vertical.Trim(),
-                              StringComparer.OrdinalIgnoreCase);
+            var industriaDict = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var i in maestro.Industrias.Where(i => !string.IsNullOrWhiteSpace(i.CodIndustria)))
+                industriaDict.TryAdd(i.CodIndustria.Trim(), i.Vertical.Trim());
 
-            // CeBe code → Area
-            var areaDict = maestro.Areas
-                .Where(a => !string.IsNullOrWhiteSpace(a.CeBe))
-                .ToDictionary(a => a.CeBe.Trim(), a => a.Area.Trim(),
-                              StringComparer.OrdinalIgnoreCase);
+            var areaDict = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var a in maestro.Areas.Where(a => !string.IsNullOrWhiteSpace(a.CeBe)))
+                areaDict.TryAdd(a.CeBe.Trim(), a.Area.Trim());
 
             // ── Step 3b: persistir TipoCambio (COP y USD) ───────────────────
             await _db.TiposCambio.ExecuteDeleteAsync();

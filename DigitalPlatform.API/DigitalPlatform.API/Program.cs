@@ -22,14 +22,14 @@ builder.Services.AddScoped<IMaestroReferenciasParser, MaestroReferenciasParser>(
 builder.Services.AddScoped<IConsolidacionService, ConsolidacionService>();
 // builder.Services.AddScoped<IProyectoService, ProyectoService>();           // Task 16
 
-// Permitir archivos grandes (100 MB) en uploads multipart
+// Permitir archivos grandes en uploads multipart (5 archivos, hasta ~512 MB en total)
 builder.Services.Configure<FormOptions>(o =>
 {
-    o.MultipartBodyLengthLimit = 104_857_600; // 100 MB
+    o.MultipartBodyLengthLimit = 536_870_912; // 512 MB
 });
 builder.WebHost.ConfigureKestrel(o =>
 {
-    o.Limits.MaxRequestBodySize = 104_857_600; // 100 MB
+    o.Limits.MaxRequestBodySize = 536_870_912; // 512 MB
 });
 
 builder.Services.AddControllers();

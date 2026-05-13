@@ -23,8 +23,8 @@ public class ApplicationDbContext : DbContext
             entity.HasKey(e => e.Id);
             entity.Property(e => e.Industria).HasMaxLength(100);
             entity.Property(e => e.Cliente).HasMaxLength(200);
-            entity.Property(e => e.CodProyecto).HasMaxLength(50);
-            entity.Property(e => e.CeBe).HasMaxLength(50);
+            entity.Property(e => e.CodProyecto).HasMaxLength(100);
+            entity.Property(e => e.CeBe).HasMaxLength(200);
             entity.Property(e => e.Responsable).HasMaxLength(200);
             entity.Property(e => e.Area).HasMaxLength(100);
             entity.Property(e => e.Sociedad).HasMaxLength(100);
