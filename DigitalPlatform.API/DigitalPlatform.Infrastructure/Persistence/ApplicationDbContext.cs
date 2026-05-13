@@ -49,7 +49,7 @@ public class ApplicationDbContext : DbContext
             entity.HasKey(e => e.Id);
             entity.Property(e => e.Estado).HasConversion<string>();
             entity.Property(e => e.IniciadoPor).HasMaxLength(200);
-            entity.Property(e => e.Errores).HasColumnType("nvarchar(max)");
+            entity.Property(e => e.Errores).HasColumnType("text");
         });
 
         modelBuilder.Entity<TipoCambio>(entity =>
