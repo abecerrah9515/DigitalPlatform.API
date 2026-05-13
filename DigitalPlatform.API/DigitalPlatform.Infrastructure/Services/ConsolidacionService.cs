@@ -124,10 +124,10 @@ public class ConsolidacionService : IConsolidacionService
                 .Where(s => !string.IsNullOrWhiteSpace(s.Sociedad))
                 .ToDictionary(s => s.Sociedad.Trim(), s => s, StringComparer.OrdinalIgnoreCase);
 
-            // CeBeGroup → CodIndustria (vía Verticales)
-            var verticalDict = maestro.Verticales
-                .Where(v => !string.IsNullOrWhiteSpace(v.Vertical))
-                .ToDictionary(v => v.Vertical.Trim(), v => v.CodIndustria.Trim(),
+            // CodIndustria → Vertical name (e.g. "Z01" → "Banca y finanzas")
+            var industriaDict = maestro.Industrias
+                .Where(i => !string.IsNullOrWhiteSpace(i.CodIndustria))
+                .ToDictionary(i => i.CodIndustria.Trim(), i => i.Vertical.Trim(),
                               StringComparer.OrdinalIgnoreCase);
 
             // CeBe code → Area
@@ -136,9 +136,17 @@ public class ConsolidacionService : IConsolidacionService
                 .ToDictionary(a => a.CeBe.Trim(), a => a.Area.Trim(),
                               StringComparer.OrdinalIgnoreCase);
 
-            // (Año, Mes) → Tasa de cambio
-            var tasaDict = (tdcRegistros ?? [])
-                .ToDictionary(t => (t.Año, t.Mes), t => t.TasaCop);
+            // ── Step 3b: persistir TipoCambio (COP y USD) ───────────────────
+            await _db.TiposCambio.ExecuteDeleteAsync();
+            var tiposCambio = new List<TipoCambio>();
+            foreach (var tdc in tdcRegistros ?? [])
+            {
+                if (tdc.TasaCop != 0m)
+                    tiposCambio.Add(new TipoCambio { Año = tdc.Año, Mes = tdc.Mes, Moneda = "COP", Tasa = tdc.TasaCop });
+                if (tdc.TasaUsd != 0m)
+                    tiposCambio.Add(new TipoCambio { Año = tdc.Año, Mes = tdc.Mes, Moneda = "USD", Tasa = tdc.TasaUsd });
+            }
+            _db.TiposCambio.AddRange(tiposCambio);
 
             // ── Step 4: agregar GR55 → IngresoReal / CostoReal ───────────────
             var gr55Agg = new Dictionary<ClaveProyecto, Gr55Bucket>();
@@ -147,23 +155,8 @@ public class ConsolidacionService : IConsolidacionService
             {
                 var clave = new ClaveProyecto(r.ElementoPEP.Trim(), r.Ejercicio, r.PeriodoContable);
 
-                // Conversión de moneda: si no es EUR, aplicar tasa del TDC
-                var valor = r.ValorMonedaLocalCeBe;
-                if (!string.IsNullOrWhiteSpace(r.ClaveMonedaLocalCeBe) &&
-                    !r.ClaveMonedaLocalCeBe.Equals("EUR", StringComparison.OrdinalIgnoreCase))
-                {
-                    if (tasaDict.TryGetValue((r.Ejercicio, r.PeriodoContable), out var tasa) && tasa != 0)
-                        valor /= tasa;
-                    else
-                    {
-                        var msg = $"GR55: sin tasa para {r.Ejercicio}/{r.PeriodoContable} " +
-                                  $"moneda={r.ClaveMonedaLocalCeBe}. Valor sin convertir.";
-                        warnings.Add(msg);
-                        _logger.LogWarning("ConsolidacionService: {Msg}", msg);
-                    }
-                }
-
                 // Clasificar cuenta como Ingreso o Costo
+                var valor = r.ValorMonedaLocalCeBe;
                 cuentaClasif.TryGetValue(r.NumeroCuenta.Trim(), out var clasif);
 
                 var prev = gr55Agg.GetValueOrDefault(clave)
@@ -224,10 +217,10 @@ public class ConsolidacionService : IConsolidacionService
                     horasAgg.TryGetValue(clave, out var horas);
 
                     // Resolver Sociedad
-                    var rawSoc   = g?.SocReceptora ?? string.Empty;
-                    var sociedad = sociedadDict.TryGetValue(rawSoc, out var socRef)
-                        ? socRef.RazonSocial
-                        : rawSoc;
+                    var rawSoc = g?.SocReceptora ?? string.Empty;
+                    sociedadDict.TryGetValue(rawSoc, out var socRef);
+                    var sociedad = socRef?.RazonSocial ?? rawSoc;
+                    var pais     = socRef?.Pais ?? string.Empty;
 
                     // Resolver CeBe: GR55 tiene prioridad; fallback a Planeación
                     var rawCebe = !string.IsNullOrWhiteSpace(g?.CentroBeneficio)
@@ -242,12 +235,11 @@ public class ConsolidacionService : IConsolidacionService
                         cebeGroup  = cebeRef.CeBeGroup;
                     }
 
-                    // Resolver Industria: CeBeGroup → Verticales; fallback a Planeación
-                    var industria = string.Empty;
-                    if (!string.IsNullOrWhiteSpace(cebeGroup))
-                        verticalDict.TryGetValue(cebeGroup, out industria!);
-                    if (string.IsNullOrWhiteSpace(industria))
-                        industria = p?.Industria ?? string.Empty;
+                    // Industria = CodIndustria de la fuente (e.g. "Z01")
+                    var industria = p?.Industria ?? string.Empty;
+
+                    // Vertical = nombre legible vía maestro Industrias
+                    industriaDict.TryGetValue(industria, out var vertical);
 
                     // Resolver Area via CeBe → Areas
                     var area = string.Empty;
@@ -266,8 +258,10 @@ public class ConsolidacionService : IConsolidacionService
                         CostoPlaneado    = p?.CostoPlaneado    ?? 0m,
                         Horas            = horas,
                         Sociedad         = sociedad,
+                        Pais             = pais,
                         CeBe             = cebeNombre,
                         Industria        = industria,
+                        Vertical         = vertical ?? string.Empty,
                         Area             = area ?? string.Empty,
                         Cliente          = p?.Cliente    ?? string.Empty,
                         Responsable      = p?.Responsable ?? string.Empty,

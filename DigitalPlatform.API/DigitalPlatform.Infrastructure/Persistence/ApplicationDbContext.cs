@@ -28,6 +28,8 @@ public class ApplicationDbContext : DbContext
             entity.Property(e => e.Responsable).HasMaxLength(200);
             entity.Property(e => e.Area).HasMaxLength(100);
             entity.Property(e => e.Sociedad).HasMaxLength(100);
+            entity.Property(e => e.Vertical).HasMaxLength(100);
+            entity.Property(e => e.Pais).HasMaxLength(100);
             entity.Property(e => e.IngresoReal).HasPrecision(18, 2);
             entity.Property(e => e.IngresoPlaneado).HasPrecision(18, 2);
             entity.Property(e => e.CostoReal).HasPrecision(18, 2);

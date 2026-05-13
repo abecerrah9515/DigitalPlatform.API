@@ -14,6 +14,8 @@ public class Proyecto
     public string Responsable { get; set; } = string.Empty;
     public string Area { get; set; } = string.Empty;
     public string Sociedad { get; set; } = string.Empty;
+    public string Vertical { get; set; } = string.Empty;
+    public string Pais { get; set; } = string.Empty;
 
     // FK a la corrida de consolidación que generó este registro
     public int ConsolidacionId { get; set; }
