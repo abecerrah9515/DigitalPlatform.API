@@ -1,4 +1,4 @@
-using ClosedXML.Excel;
+using MiniExcelLibs;
 using DigitalPlatform.Application.DTOs.Fuentes;
 using DigitalPlatform.Application.Interfaces.Parsers;
 using Microsoft.Extensions.Logging;
@@ -9,7 +9,6 @@ namespace DigitalPlatform.Infrastructure.Parsers;
 public class GR55Parser : IGR55Parser
 {
     private readonly ILogger<GR55Parser> _logger;
-
     private static readonly Regex PepTokenRegex =
         new(@"(?i)\bPEP\s+([\w\-]+)", RegexOptions.Compiled);
 
@@ -18,35 +17,34 @@ public class GR55Parser : IGR55Parser
     public Task<List<RegistroGR55Dto>> ParsearAsync(Stream archivo)
     {
         var resultado = new List<RegistroGR55Dto>();
+        var sheetNames = archivo.GetSheetNames();
 
-        using var wb = new XLWorkbook(archivo);
-
-        foreach (var ws in wb.Worksheets)
+        foreach (var sheetName in sheetNames)
         {
-            var colMap = ExcelParserHelper.BuildColumnMap(ws.Row(1));
+            var filas = archivo.Query(useHeaderRow: true, sheetName: sheetName);
+            var validado = false;
+            var omitir   = false;
 
-            if (!colMap.TryGetValue("elemento pep", out int colPep) ||
-                !colMap.TryGetValue("texto", out int colTexto))
+            foreach (IDictionary<string, object> fila in filas)
             {
-                _logger.LogWarning("GR55 hoja '{Sheet}': columnas requeridas no encontradas, se omite.", ws.Name);
-                continue;
-            }
+                var row = ExcelParserHelper.NormalizeRow(fila);
 
-            colMap.TryGetValue("soc.receptora", out int colSoc);
-            colMap.TryGetValue("periodo contable", out int colPeriodo);
-            colMap.TryGetValue("ejercicio", out int colEjercicio);
-            colMap.TryGetValue("numero de cuenta", out int colNumCuenta);
-            colMap.TryGetValue("denominacion", out int colDenom);
-            colMap.TryGetValue("centro de beneficio", out int colCentro);
-            colMap.TryGetValue("en moneda local centro de beneficio", out int colMonto);
-            colMap.TryGetValue("clave moneda ml cebe", out int colMoneda);
+                if (!validado)
+                {
+                    validado = true;
+                    if (!row.ContainsKey("elemento pep") || !row.ContainsKey("texto"))
+                    {
+                        _logger.LogWarning("GR55 hoja '{Sheet}': columnas requeridas no encontradas, se omite.", sheetName);
+                        omitir = true;
+                    }
+                }
 
-            foreach (var fila in ws.RowsUsed().Skip(1))
-            {
+                if (omitir) break;
+
                 try
                 {
-                    var elementoPep = ExcelParserHelper.GetString(fila, colPep);
-                    var texto = ExcelParserHelper.GetString(fila, colTexto);
+                    var elementoPep = ExcelParserHelper.GetString(row, "elemento pep");
+                    var texto       = ExcelParserHelper.GetString(row, "texto");
 
                     if (string.IsNullOrWhiteSpace(elementoPep))
                     {
@@ -60,21 +58,21 @@ public class GR55Parser : IGR55Parser
 
                     resultado.Add(new RegistroGR55Dto
                     {
-                        SocReceptora        = ExcelParserHelper.GetString(fila, colSoc),
-                        PeriodoContable     = ExcelParserHelper.GetInt(fila, colPeriodo),
-                        Ejercicio           = ExcelParserHelper.GetInt(fila, colEjercicio),
-                        NumeroCuenta        = ExcelParserHelper.GetString(fila, colNumCuenta),
-                        Denominacion        = ExcelParserHelper.GetString(fila, colDenom),
-                        ElementoPEP         = elementoPep,
-                        CentroBeneficio     = ExcelParserHelper.GetString(fila, colCentro),
-                        Texto               = texto,
-                        ValorMonedaLocalCeBe   = ExcelParserHelper.GetDecimal(fila, colMonto) * -1,
-                        ClaveMonedaLocalCeBe   = ExcelParserHelper.GetString(fila, colMoneda),
+                        SocReceptora         = ExcelParserHelper.GetString(row, "soc.receptora"),
+                        PeriodoContable      = ExcelParserHelper.GetInt(row, "periodo contable"),
+                        Ejercicio            = ExcelParserHelper.GetInt(row, "ejercicio"),
+                        NumeroCuenta         = ExcelParserHelper.GetString(row, "numero de cuenta"),
+                        Denominacion         = ExcelParserHelper.GetString(row, "denominacion"),
+                        ElementoPEP          = elementoPep,
+                        CentroBeneficio      = ExcelParserHelper.GetString(row, "centro de beneficio"),
+                        Texto                = texto,
+                        ValorMonedaLocalCeBe = ExcelParserHelper.GetDecimal(row, "en moneda local centro de beneficio") * -1,
+                        ClaveMonedaLocalCeBe = ExcelParserHelper.GetString(row, "clave moneda ml cebe"),
                     });
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogWarning(ex, "GR55 hoja '{Sheet}' fila {Row}: error ignorado.", ws.Name, fila.RowNumber());
+                    _logger.LogWarning(ex, "GR55 hoja '{Sheet}': error en fila ignorado.", sheetName);
                 }
             }
         }

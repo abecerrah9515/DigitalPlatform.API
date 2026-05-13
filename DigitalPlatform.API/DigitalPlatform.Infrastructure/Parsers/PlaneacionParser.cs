@@ -1,4 +1,4 @@
-using ClosedXML.Excel;
+using MiniExcelLibs;
 using DigitalPlatform.Application.DTOs.Fuentes;
 using DigitalPlatform.Application.Interfaces.Parsers;
 using Microsoft.Extensions.Logging;
@@ -15,55 +15,57 @@ public class PlaneacionParser : IPlaneacionParser
 
     public Task<List<RegistroPlaneacionDto>> ParsearAsync(Stream archivo)
     {
-        var resultado = new List<RegistroPlaneacionDto>();
+        var resultado  = new List<RegistroPlaneacionDto>();
+        var sheetNames = archivo.GetSheetNames();
 
-        using var wb = new XLWorkbook(archivo);
+        var hoja = sheetNames.FirstOrDefault(s =>
+            s.Equals(HojaOrigen, StringComparison.OrdinalIgnoreCase));
 
-        if (!wb.TryGetWorksheet(HojaOrigen, out var ws))
+        if (hoja is null)
         {
             _logger.LogWarning("Planeación: no se encontró la hoja '{Sheet}'.", HojaOrigen);
             return Task.FromResult(resultado);
         }
 
-        var colMap = ExcelParserHelper.BuildColumnMap(ws!.Row(1));
+        var filas    = archivo.Query(useHeaderRow: true, sheetName: hoja);
+        var validado = false;
+        var omitir   = false;
 
-        if (!colMap.TryGetValue("cliente", out int colCliente) ||
-            !colMap.TryGetValue("proyecto", out int colProyecto))
+        foreach (IDictionary<string, object> fila in filas)
         {
-            _logger.LogWarning("Planeación: columnas requeridas no encontradas en '{Sheet}'.", HojaOrigen);
-            return Task.FromResult(resultado);
-        }
+            var row = ExcelParserHelper.NormalizeRow(fila);
 
-        colMap.TryGetValue("ano", out int colAno);
-        colMap.TryGetValue("mes", out int colMes);
-        colMap.TryGetValue("ingreso_previsto_eur", out int colIngreso);
-        colMap.TryGetValue("coste_previsto_eur", out int colCoste);
-        colMap.TryGetValue("cebe", out int colCebe);
-        colMap.TryGetValue("industria", out int colIndustria);
-        colMap.TryGetValue("brm", out int colBrm);
-        colMap.TryGetValue("responsable_wbs", out int colResponsable);
+            if (!validado)
+            {
+                validado = true;
+                if (!row.ContainsKey("cliente") || !row.ContainsKey("proyecto"))
+                {
+                    _logger.LogWarning("Planeación: columnas requeridas no encontradas en '{Sheet}'.", HojaOrigen);
+                    omitir = true;
+                }
+            }
 
-        foreach (var fila in ws.RowsUsed().Skip(1))
-        {
+            if (omitir) break;
+
             try
             {
                 resultado.Add(new RegistroPlaneacionDto
                 {
-                    Cliente            = ExcelParserHelper.GetString(fila, colCliente),
-                    Proyecto           = ExcelParserHelper.GetString(fila, colProyecto),
-                    Año                = ExcelParserHelper.GetInt(fila, colAno),
-                    Mes                = ExcelParserHelper.GetInt(fila, colMes),
-                    IngresoPrevistoEur = ExcelParserHelper.GetDecimal(fila, colIngreso),
-                    CostePrevistoEur   = ExcelParserHelper.GetDecimal(fila, colCoste),
-                    Cebe               = ExcelParserHelper.GetString(fila, colCebe),
-                    Industria          = ExcelParserHelper.GetString(fila, colIndustria),
-                    Brm                = ExcelParserHelper.GetString(fila, colBrm),
-                    ResponsableWbs     = ExcelParserHelper.GetString(fila, colResponsable),
+                    Cliente            = ExcelParserHelper.GetString(row, "cliente"),
+                    Proyecto           = ExcelParserHelper.GetString(row, "proyecto"),
+                    Año                = ExcelParserHelper.GetInt(row, "ano"),
+                    Mes                = ExcelParserHelper.GetInt(row, "mes"),
+                    IngresoPrevistoEur = ExcelParserHelper.GetDecimal(row, "ingreso_previsto_eur"),
+                    CostePrevistoEur   = ExcelParserHelper.GetDecimal(row, "coste_previsto_eur"),
+                    Cebe               = ExcelParserHelper.GetString(row, "cebe"),
+                    Industria          = ExcelParserHelper.GetString(row, "industria"),
+                    Brm                = ExcelParserHelper.GetString(row, "brm"),
+                    ResponsableWbs     = ExcelParserHelper.GetString(row, "responsable_wbs"),
                 });
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Planeación fila {Row}: error ignorado.", fila.RowNumber());
+                _logger.LogWarning(ex, "Planeación: error en fila ignorado.");
             }
         }
 

@@ -1,4 +1,4 @@
-using ClosedXML.Excel;
+using MiniExcelLibs;
 using DigitalPlatform.Application.DTOs.Fuentes;
 using DigitalPlatform.Application.Interfaces.Parsers;
 using Microsoft.Extensions.Logging;
@@ -7,7 +7,7 @@ namespace DigitalPlatform.Infrastructure.Parsers;
 
 public class HorasParser : IHorasParser
 {
-    private const string HojaOrigen = "qData";
+    private const string HojaOrigen    = "qData";
     private const string EstadoAceptado = "Accepted";
 
     private readonly ILogger<HorasParser> _logger;
@@ -16,60 +16,61 @@ public class HorasParser : IHorasParser
 
     public Task<List<RegistroHorasDto>> ParsearAsync(Stream archivo)
     {
-        var resultado = new List<RegistroHorasDto>();
+        var resultado  = new List<RegistroHorasDto>();
+        var sheetNames = archivo.GetSheetNames();
 
-        using var wb = new XLWorkbook(archivo);
+        var hoja = sheetNames.FirstOrDefault(s =>
+            s.Equals(HojaOrigen, StringComparison.OrdinalIgnoreCase));
 
-        if (!wb.TryGetWorksheet(HojaOrigen, out var ws))
+        if (hoja is null)
         {
             _logger.LogWarning("Horas: no se encontró la hoja '{Sheet}'.", HojaOrigen);
             return Task.FromResult(resultado);
         }
 
-        var colMap = ExcelParserHelper.BuildColumnMap(ws!.Row(1));
+        var filas    = archivo.Query(useHeaderRow: true, sheetName: hoja);
+        var validado = false;
+        var omitir   = false;
 
-        if (!colMap.TryGetValue("estado", out int colEstado) ||
-            !colMap.TryGetValue("horas", out int colHoras))
+        foreach (IDictionary<string, object> fila in filas)
         {
-            _logger.LogWarning("Horas: columnas requeridas no encontradas en '{Sheet}'.", HojaOrigen);
-            return Task.FromResult(resultado);
-        }
+            var row = ExcelParserHelper.NormalizeRow(fila);
 
-        colMap.TryGetValue("trabajador_id", out int colId);
-        colMap.TryGetValue("trabajador_nombre", out int colNombre);
-        colMap.TryGetValue("trabajador_ceco", out int colCeco);
-        colMap.TryGetValue("proyecto", out int colProyecto);
-        colMap.TryGetValue("trabajador_sociedad_fi", out int colSociedad);
-        colMap.TryGetValue("proyecto_industria", out int colIndustria);
-        colMap.TryGetValue("ano", out int colAno);
-        colMap.TryGetValue("mes", out int colMes);
-        colMap.TryGetValue("brm", out int colBrm);
+            if (!validado)
+            {
+                validado = true;
+                if (!row.ContainsKey("estado") || !row.ContainsKey("horas"))
+                {
+                    _logger.LogWarning("Horas: columnas requeridas no encontradas en '{Sheet}'.", HojaOrigen);
+                    omitir = true;
+                }
+            }
 
-        foreach (var fila in ws.RowsUsed().Skip(1))
-        {
+            if (omitir) break;
+
             try
             {
-                var estado = ExcelParserHelper.GetString(fila, colEstado);
+                var estado = ExcelParserHelper.GetString(row, "estado");
                 if (!estado.Equals(EstadoAceptado, StringComparison.OrdinalIgnoreCase))
                     continue;
 
                 resultado.Add(new RegistroHorasDto
                 {
-                    TrabajadorId = ExcelParserHelper.GetString(fila, colId),
-                    Nombre       = ExcelParserHelper.GetString(fila, colNombre),
-                    Ceco         = ExcelParserHelper.GetString(fila, colCeco),
-                    Proyecto     = ExcelParserHelper.GetString(fila, colProyecto),
-                    Sociedad     = ExcelParserHelper.GetString(fila, colSociedad),
-                    Industria    = ExcelParserHelper.GetString(fila, colIndustria),
-                    Año          = ExcelParserHelper.GetInt(fila, colAno),
-                    Mes          = ExcelParserHelper.GetInt(fila, colMes),
-                    Horas        = ExcelParserHelper.GetDecimal(fila, colHoras),
-                    Brm          = ExcelParserHelper.GetString(fila, colBrm),
+                    TrabajadorId = ExcelParserHelper.GetString(row, "trabajador_id"),
+                    Nombre       = ExcelParserHelper.GetString(row, "trabajador_nombre"),
+                    Ceco         = ExcelParserHelper.GetString(row, "trabajador_ceco"),
+                    Proyecto     = ExcelParserHelper.GetString(row, "proyecto"),
+                    Sociedad     = ExcelParserHelper.GetString(row, "trabajador_sociedad_fi"),
+                    Industria    = ExcelParserHelper.GetString(row, "proyecto_industria"),
+                    Año          = ExcelParserHelper.GetInt(row, "ano"),
+                    Mes          = ExcelParserHelper.GetInt(row, "mes"),
+                    Horas        = ExcelParserHelper.GetDecimal(row, "horas"),
+                    Brm          = ExcelParserHelper.GetString(row, "brm"),
                 });
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Horas fila {Row}: error ignorado.", fila.RowNumber());
+                _logger.LogWarning(ex, "Horas: error en fila ignorado.");
             }
         }
 

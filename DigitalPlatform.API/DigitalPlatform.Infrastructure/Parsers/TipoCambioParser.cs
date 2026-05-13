@@ -1,4 +1,4 @@
-using ClosedXML.Excel;
+using MiniExcelLibs;
 using DigitalPlatform.Application.DTOs.Fuentes;
 using DigitalPlatform.Application.Interfaces.Parsers;
 using Microsoft.Extensions.Logging;
@@ -14,35 +14,56 @@ public class TipoCambioParser : ITipoCambioParser
 
     public Task<List<RegistroTipoCambioDto>> ParsearAsync(Stream archivo)
     {
-        var resultado = new List<RegistroTipoCambioDto>();
+        var resultado  = new List<RegistroTipoCambioDto>();
+        var sheetNames = archivo.GetSheetNames();
+        var primerHoja = sheetNames.FirstOrDefault();
 
-        using var wb = new XLWorkbook(archivo);
-        var ws = wb.Worksheets.First();
-
-        var colMap = ExcelParserHelper.BuildColumnMap(ws.Row(1));
-
-        if (!colMap.TryGetValue("fecha", out int colFecha) ||
-            !colMap.TryGetValue("t.c. mxn", out int colPeriodo) ||
-            !colMap.TryGetValue("tasas", out int colTasa))
+        if (primerHoja is null)
         {
-            _logger.LogWarning("TDC: columnas requeridas no encontradas. Columnas encontradas: {Cols}",
-                string.Join(", ", colMap.Keys));
+            _logger.LogWarning("TDC: el archivo no contiene hojas.");
             return Task.FromResult(resultado);
         }
 
-        foreach (var fila in ws.RowsUsed().Skip(1))
+        var filas    = archivo.Query(useHeaderRow: true, sheetName: primerHoja);
+        var validado = false;
+        var omitir   = false;
+
+        foreach (IDictionary<string, object> fila in filas)
         {
+            var row = ExcelParserHelper.NormalizeRow(fila);
+
+            if (!validado)
+            {
+                validado = true;
+                if (!row.ContainsKey("fecha") || !row.ContainsKey("t.c. mxn"))
+                {
+                    _logger.LogWarning("TDC: columnas requeridas no encontradas. Columnas: {Cols}",
+                        string.Join(", ", row.Keys));
+                    omitir = true;
+                }
+            }
+
+            if (omitir) break;
+
             try
             {
-                var fechaStr   = ExcelParserHelper.GetString(fila, colFecha);
-                var periodoStr = ExcelParserHelper.GetString(fila, colPeriodo);
-                var tasa       = ExcelParserHelper.GetDecimal(fila, colTasa);
+                var fechaVal   = row.TryGetValue("fecha", out var fv) ? fv : null;
+                var periodoStr = ExcelParserHelper.GetString(row, "t.c. mxn");
 
-                if (!DateOnly.TryParseExact(fechaStr, "dd.MM.yyyy",
-                        CultureInfo.InvariantCulture, DateTimeStyles.None, out var fecha))
+                DateOnly fecha;
+                if (fechaVal is DateTime dt)
                 {
-                    _logger.LogWarning("TDC fila {Row}: fecha inválida '{Val}', se omite.", fila.RowNumber(), fechaStr);
-                    continue;
+                    fecha = DateOnly.FromDateTime(dt);
+                }
+                else
+                {
+                    var fechaStr = fechaVal?.ToString() ?? "";
+                    if (!DateOnly.TryParseExact(fechaStr, "dd.MM.yyyy",
+                            CultureInfo.InvariantCulture, DateTimeStyles.None, out fecha))
+                    {
+                        _logger.LogWarning("TDC: fecha inválida '{Val}', se omite.", fechaStr);
+                        continue;
+                    }
                 }
 
                 var partes = periodoStr.Split('/');
@@ -50,21 +71,28 @@ public class TipoCambioParser : ITipoCambioParser
                     !int.TryParse(partes[0], out int año) ||
                     !int.TryParse(partes[1], out int mes))
                 {
-                    _logger.LogWarning("TDC fila {Row}: período inválido '{Val}', se omite.", fila.RowNumber(), periodoStr);
+                    _logger.LogWarning("TDC: período inválido '{Val}', se omite.", periodoStr);
                     continue;
                 }
 
+                // Leer tasas disponibles: COP y USD (según HU, TDC tiene columnas COP y USD)
+                var tasaCop = ExcelParserHelper.GetDecimal(row, "cop");
+                var tasaUsd = ExcelParserHelper.GetDecimal(row, "usd");
+                // Fallback a columna genérica "tasas" si existe
+                if (tasaCop == 0m) tasaCop = ExcelParserHelper.GetDecimal(row, "tasas");
+
                 resultado.Add(new RegistroTipoCambioDto
                 {
-                    Fecha = fecha,
-                    Año   = año,
-                    Mes   = mes,
-                    Tasa  = tasa,
+                    Fecha   = fecha,
+                    Año     = año,
+                    Mes     = mes,
+                    TasaCop = tasaCop,
+                    TasaUsd = tasaUsd,
                 });
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "TDC fila {Row}: error ignorado.", fila.RowNumber());
+                _logger.LogWarning(ex, "TDC: error en fila ignorado.");
             }
         }
 

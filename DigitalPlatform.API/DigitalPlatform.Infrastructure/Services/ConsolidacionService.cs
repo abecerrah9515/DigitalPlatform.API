@@ -138,7 +138,7 @@ public class ConsolidacionService : IConsolidacionService
 
             // (Año, Mes) → Tasa de cambio
             var tasaDict = (tdcRegistros ?? [])
-                .ToDictionary(t => (t.Año, t.Mes), t => t.Tasa);
+                .ToDictionary(t => (t.Año, t.Mes), t => t.TasaCop);
 
             // ── Step 4: agregar GR55 → IngresoReal / CostoReal ───────────────
             var gr55Agg = new Dictionary<ClaveProyecto, Gr55Bucket>();

@@ -1,4 +1,3 @@
-using ClosedXML.Excel;
 using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -7,20 +6,9 @@ namespace DigitalPlatform.Infrastructure.Parsers;
 
 internal static class ExcelParserHelper
 {
-    internal static Dictionary<string, int> BuildColumnMap(IXLRow headerRow)
-    {
-        var map = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        foreach (var cell in headerRow.CellsUsed())
-        {
-            var key = Normalize(cell.GetString());
-            if (!string.IsNullOrWhiteSpace(key))
-                map.TryAdd(key, cell.Address.ColumnNumber);
-        }
-        return map;
-    }
-
     internal static string Normalize(string s)
     {
+        if (string.IsNullOrEmpty(s)) return string.Empty;
         var normalized = s.Normalize(NormalizationForm.FormD);
         var sb = new StringBuilder(normalized.Length);
         foreach (var c in normalized)
@@ -31,31 +19,46 @@ internal static class ExcelParserHelper
         return Regex.Replace(sb.ToString().ToLowerInvariant(), @"\s+", " ").Trim();
     }
 
-    internal static string GetString(IXLRow row, int col) =>
-        col > 0 ? row.Cell(col).GetString().Trim() : string.Empty;
-
-    internal static int GetInt(IXLRow row, int col)
+    // Devuelve un nuevo diccionario con todas las claves normalizadas
+    internal static Dictionary<string, object?> NormalizeRow(IDictionary<string, object> row)
     {
-        if (col <= 0) return 0;
-        var cell = row.Cell(col);
-        if (cell.TryGetValue<int>(out var v)) return v;
-        return int.TryParse(cell.GetString(), out var p) ? p : 0;
+        var result = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+        foreach (var kv in row)
+        {
+            var key = Normalize(kv.Key ?? "");
+            if (!string.IsNullOrWhiteSpace(key))
+                result.TryAdd(key, kv.Value);
+        }
+        return result;
     }
 
-    internal static decimal GetDecimal(IXLRow row, int col)
+    internal static string GetString(Dictionary<string, object?> row, string key)
+        => row.TryGetValue(key, out var val) ? val?.ToString()?.Trim() ?? "" : "";
+
+    internal static int GetInt(Dictionary<string, object?> row, string key)
     {
-        if (col <= 0) return 0m;
-        var cell = row.Cell(col);
-        if (cell.TryGetValue<decimal>(out var v)) return v;
-        return decimal.TryParse(cell.GetString(),
-            NumberStyles.Any, CultureInfo.InvariantCulture, out var p) ? p : 0m;
+        if (!row.TryGetValue(key, out var val)) return 0;
+        return val switch
+        {
+            double d  => (int)d,
+            int i     => i,
+            long l    => (int)l,
+            decimal m => (int)m,
+            _         => int.TryParse(val?.ToString(), out var p) ? p : 0
+        };
     }
 
-    internal static DateOnly GetDateOnly(IXLRow row, int col)
+    internal static decimal GetDecimal(Dictionary<string, object?> row, string key)
     {
-        if (col <= 0) return DateOnly.MinValue;
-        var cell = row.Cell(col);
-        if (cell.TryGetValue<DateTime>(out var dt)) return DateOnly.FromDateTime(dt);
-        return DateOnly.TryParse(cell.GetString(), out var d) ? d : DateOnly.MinValue;
+        if (!row.TryGetValue(key, out var val)) return 0m;
+        return val switch
+        {
+            double d  => (decimal)d,
+            decimal m => m,
+            int i     => i,
+            long l    => l,
+            _         => decimal.TryParse(val?.ToString(), NumberStyles.Any,
+                             CultureInfo.InvariantCulture, out var p) ? p : 0m
+        };
     }
 }
