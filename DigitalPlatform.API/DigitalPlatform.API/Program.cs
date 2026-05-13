@@ -3,6 +3,7 @@ using DigitalPlatform.Application.Interfaces.Parsers;
 using DigitalPlatform.Infrastructure.Parsers;
 using DigitalPlatform.Infrastructure.Persistence;
 using DigitalPlatform.Infrastructure.Services;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -20,6 +21,16 @@ builder.Services.AddScoped<IMaestroReferenciasParser, MaestroReferenciasParser>(
 // Services
 builder.Services.AddScoped<IConsolidacionService, ConsolidacionService>();
 // builder.Services.AddScoped<IProyectoService, ProyectoService>();           // Task 16
+
+// Permitir archivos grandes (100 MB) en uploads multipart
+builder.Services.Configure<FormOptions>(o =>
+{
+    o.MultipartBodyLengthLimit = 104_857_600; // 100 MB
+});
+builder.WebHost.ConfigureKestrel(o =>
+{
+    o.Limits.MaxRequestBodySize = 104_857_600; // 100 MB
+});
 
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
