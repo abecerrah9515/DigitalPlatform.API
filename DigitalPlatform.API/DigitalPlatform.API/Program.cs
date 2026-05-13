@@ -1,6 +1,8 @@
+using DigitalPlatform.Application.Interfaces;
 using DigitalPlatform.Application.Interfaces.Parsers;
 using DigitalPlatform.Infrastructure.Parsers;
 using DigitalPlatform.Infrastructure.Persistence;
+using DigitalPlatform.Infrastructure.Services;
 using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -15,8 +17,8 @@ builder.Services.AddScoped<IPlaneacionParser, PlaneacionParser>();
 builder.Services.AddScoped<ITipoCambioParser, TipoCambioParser>();
 builder.Services.AddScoped<IMaestroReferenciasParser, MaestroReferenciasParser>();
 
-// Services (Juan: implementar en Infrastructure/Services/)
-// builder.Services.AddScoped<IConsolidacionService, ConsolidacionService>(); // Task 10
+// Services
+builder.Services.AddScoped<IConsolidacionService, ConsolidacionService>();
 // builder.Services.AddScoped<IProyectoService, ProyectoService>();           // Task 16
 
 builder.Services.AddControllers();
