@@ -38,6 +38,10 @@ public class ApplicationDbContext : DbContext
             entity.Ignore(e => e.GM);
             entity.Ignore(e => e.GMPorcentaje);
             entity.Ignore(e => e.TarifaEntrega);
+            entity.HasOne(e => e.Consolidacion)
+                  .WithMany(c => c.Proyectos)
+                  .HasForeignKey(e => e.ConsolidacionId)
+                  .OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<ConsolidacionLog>(entity =>
