@@ -132,18 +132,6 @@ public class ConsolidacionService : IConsolidacionService
             foreach (var a in maestro.Areas.Where(a => !string.IsNullOrWhiteSpace(a.CeBe)))
                 areaDict.TryAdd(a.CeBe.Trim(), a.Area.Trim());
 
-            // ── Step 3b: persistir TipoCambio (COP y USD) ───────────────────
-            await _db.TiposCambio.ExecuteDeleteAsync();
-            var tiposCambio = new List<TipoCambio>();
-            foreach (var tdc in tdcRegistros ?? [])
-            {
-                if (tdc.TasaCop != 0m)
-                    tiposCambio.Add(new TipoCambio { Año = tdc.Año, Mes = tdc.Mes, Moneda = "COP", Tasa = tdc.TasaCop });
-                if (tdc.TasaUsd != 0m)
-                    tiposCambio.Add(new TipoCambio { Año = tdc.Año, Mes = tdc.Mes, Moneda = "USD", Tasa = tdc.TasaUsd });
-            }
-            _db.TiposCambio.AddRange(tiposCambio);
-
             // ── Step 4: agregar GR55 → IngresoReal / CostoReal ───────────────
             var gr55Agg = new Dictionary<ClaveProyecto, Gr55Bucket>();
 

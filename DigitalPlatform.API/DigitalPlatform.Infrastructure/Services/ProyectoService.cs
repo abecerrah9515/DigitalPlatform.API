@@ -71,10 +71,11 @@ public class ProyectoService : IProyectoService
 
         var moneda = (f.Moneda ?? "COP").ToUpperInvariant();
 
-        // LEFT JOIN con TiposCambio: Factor = tasa si COP, 1 si USD o sin registro
+        // LEFT JOIN con TiposCambio COP para obtener la tasa de conversión.
+        // Si moneda == "USD" los valores ya están en USD → Factor = 1 siempre.
         var raw = await (
             from p in q
-            join tc in _db.TiposCambio.Where(t => t.Moneda == moneda)
+            join tc in _db.TiposCambio.Where(t => t.Moneda == "COP")
                 on new { p.Año, p.Mes } equals new { tc.Año, tc.Mes } into g
             from tc in g.DefaultIfEmpty()
             select new
@@ -82,7 +83,7 @@ public class ProyectoService : IProyectoService
                 p.Año, p.Mes, p.Cliente, p.CodProyecto, p.Industria, p.Vertical,
                 p.Area, p.Sociedad, p.Pais, p.CeBe, p.Responsable,
                 p.IngresoReal, p.IngresoPlaneado, p.CostoReal, p.CostoPlaneado, p.Horas,
-                Factor = tc == null ? 1m : tc.Tasa
+                TasaCop = tc == null ? 1m : tc.Tasa
             }
         ).ToListAsync();
 
@@ -90,7 +91,7 @@ public class ProyectoService : IProyectoService
             x.Año, x.Mes, x.Cliente, x.CodProyecto, x.Industria, x.Vertical,
             x.Area, x.Sociedad, x.Pais, x.CeBe, x.Responsable,
             x.IngresoReal, x.IngresoPlaneado, x.CostoReal, x.CostoPlaneado, x.Horas,
-            x.Factor
+            Factor: moneda == "USD" ? 1m : x.TasaCop
         )).ToList();
 
         return (datos, true);
