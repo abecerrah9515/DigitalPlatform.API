@@ -10,7 +10,6 @@ public class GR55Parser : IGR55Parser
 {
     private readonly ILogger<GR55Parser> _logger;
 
-    // Captures the WBS-like token that follows the word "PEP" in the Texto column
     private static readonly Regex PepTokenRegex =
         new(@"(?i)\bPEP\s+([\w\-]+)", RegexOptions.Compiled);
 
@@ -39,8 +38,8 @@ public class GR55Parser : IGR55Parser
             colMap.TryGetValue("numero de cuenta", out int colNumCuenta);
             colMap.TryGetValue("denominacion", out int colDenom);
             colMap.TryGetValue("centro de beneficio", out int colCentro);
-            colMap.TryGetValue("en moneda de transaccion", out int colMonto);
-            colMap.TryGetValue("clave moneda mt", out int colMoneda);
+            colMap.TryGetValue("en moneda local centro de beneficio", out int colMonto);
+            colMap.TryGetValue("clave moneda ml cebe", out int colMoneda);
 
             foreach (var fila in ws.RowsUsed().Skip(1))
             {
@@ -69,15 +68,13 @@ public class GR55Parser : IGR55Parser
                         ElementoPEP         = elementoPep,
                         CentroBeneficio     = ExcelParserHelper.GetString(fila, colCentro),
                         Texto               = texto,
-                        EnMonedaTransaccion = ExcelParserHelper.GetDecimal(fila, colMonto),
-                        ClaveMonedaMT       = ExcelParserHelper.GetString(fila, colMoneda),
+                        ValorMonedaLocalCeBe   = ExcelParserHelper.GetDecimal(fila, colMonto) * -1,
+                        ClaveMonedaLocalCeBe   = ExcelParserHelper.GetString(fila, colMoneda),
                     });
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogWarning(ex,
-                        "GR55 hoja '{Sheet}' fila {Row}: error ignorado.",
-                        ws.Name, fila.RowNumber());
+                    _logger.LogWarning(ex, "GR55 hoja '{Sheet}' fila {Row}: error ignorado.", ws.Name, fila.RowNumber());
                 }
             }
         }

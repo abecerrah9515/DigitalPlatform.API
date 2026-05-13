@@ -49,22 +49,21 @@ public class PlaneacionParser : IPlaneacionParser
             {
                 resultado.Add(new RegistroPlaneacionDto
                 {
-                    Cliente           = ExcelParserHelper.GetString(fila, colCliente),
-                    Proyecto          = ExcelParserHelper.GetString(fila, colProyecto),
-                    Año               = ExcelParserHelper.GetInt(fila, colAno),
-                    Mes               = ExcelParserHelper.GetInt(fila, colMes),
+                    Cliente            = ExcelParserHelper.GetString(fila, colCliente),
+                    Proyecto           = ExcelParserHelper.GetString(fila, colProyecto),
+                    Año                = ExcelParserHelper.GetInt(fila, colAno),
+                    Mes                = ExcelParserHelper.GetInt(fila, colMes),
                     IngresoPrevistoEur = ExcelParserHelper.GetDecimal(fila, colIngreso),
-                    CostePrevistoEur  = ExcelParserHelper.GetDecimal(fila, colCoste),
-                    Cebe              = ExcelParserHelper.GetString(fila, colCebe),
-                    Industria         = ExcelParserHelper.GetString(fila, colIndustria),
-                    Brm               = ExcelParserHelper.GetString(fila, colBrm),
-                    ResponsableWbs    = ExcelParserHelper.GetString(fila, colResponsable),
+                    CostePrevistoEur   = ExcelParserHelper.GetDecimal(fila, colCoste),
+                    Cebe               = ExcelParserHelper.GetString(fila, colCebe),
+                    Industria          = ExcelParserHelper.GetString(fila, colIndustria),
+                    Brm                = ExcelParserHelper.GetString(fila, colBrm),
+                    ResponsableWbs     = ExcelParserHelper.GetString(fila, colResponsable),
                 });
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex,
-                    "Planeación fila {Row}: error ignorado.", fila.RowNumber());
+                _logger.LogWarning(ex, "Planeación fila {Row}: error ignorado.", fila.RowNumber());
             }
         }
 

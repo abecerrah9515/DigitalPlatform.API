@@ -69,8 +69,7 @@ public class HorasParser : IHorasParser
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex,
-                    "Horas fila {Row}: error ignorado.", fila.RowNumber());
+                _logger.LogWarning(ex, "Horas fila {Row}: error ignorado.", fila.RowNumber());
             }
         }
 

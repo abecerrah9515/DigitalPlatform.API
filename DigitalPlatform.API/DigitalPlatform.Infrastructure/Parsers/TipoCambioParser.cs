@@ -34,19 +34,17 @@ public class TipoCambioParser : ITipoCambioParser
         {
             try
             {
-                var fechaStr = ExcelParserHelper.GetString(fila, colFecha);
+                var fechaStr   = ExcelParserHelper.GetString(fila, colFecha);
                 var periodoStr = ExcelParserHelper.GetString(fila, colPeriodo);
-                var tasa = ExcelParserHelper.GetDecimal(fila, colTasa);
+                var tasa       = ExcelParserHelper.GetDecimal(fila, colTasa);
 
-                // Fecha viene como "DD.MM.YYYY"
                 if (!DateOnly.TryParseExact(fechaStr, "dd.MM.yyyy",
-                    CultureInfo.InvariantCulture, DateTimeStyles.None, out var fecha))
+                        CultureInfo.InvariantCulture, DateTimeStyles.None, out var fecha))
                 {
                     _logger.LogWarning("TDC fila {Row}: fecha inválida '{Val}', se omite.", fila.RowNumber(), fechaStr);
                     continue;
                 }
 
-                // Período viene como "YYYY/MM"
                 var partes = periodoStr.Split('/');
                 if (partes.Length != 2 ||
                     !int.TryParse(partes[0], out int año) ||

@@ -7,10 +7,6 @@ namespace DigitalPlatform.Infrastructure.Parsers;
 
 internal static class ExcelParserHelper
 {
-    /// <summary>
-    /// Builds a normalized column-name → column-number (1-based) map from a header row.
-    /// Normalization strips accents and lowercases so matching is accent-insensitive.
-    /// </summary>
     internal static Dictionary<string, int> BuildColumnMap(IXLRow headerRow)
     {
         var map = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);

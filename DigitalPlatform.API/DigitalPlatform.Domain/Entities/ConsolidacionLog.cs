@@ -13,4 +13,6 @@ public class ConsolidacionLog
     public int RegistrosFallidos { get; set; }
     public string? Errores { get; set; }
     public string IniciadoPor { get; set; } = string.Empty;
+
+    public ICollection<Proyecto> Proyectos { get; set; } = [];
 }

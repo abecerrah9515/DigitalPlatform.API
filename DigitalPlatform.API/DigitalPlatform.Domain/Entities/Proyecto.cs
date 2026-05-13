@@ -1,3 +1,5 @@
+using System.ComponentModel.DataAnnotations.Schema;
+
 namespace DigitalPlatform.Domain.Entities;
 
 public class Proyecto
@@ -13,6 +15,10 @@ public class Proyecto
     public string Area { get; set; } = string.Empty;
     public string Sociedad { get; set; } = string.Empty;
 
+    // FK a la corrida de consolidación que generó este registro
+    public int ConsolidacionId { get; set; }
+    public ConsolidacionLog Consolidacion { get; set; } = null!;
+
     // Valores crudos de las fuentes (necesarios para KPIs Plan vs Real)
     public decimal IngresoReal { get; set; }      // ingreso_eu
     public decimal IngresoPlaneado { get; set; }  // ingreso_previsto_eur
@@ -21,10 +27,9 @@ public class Proyecto
 
     public decimal Horas { get; set; }
 
-    // Campos derivados calculados al momento de normalizar
-    public decimal Ingreso => IngresoReal + IngresoPlaneado;
-    public decimal Costo => CostoReal + CostoPlaneado;
-    public decimal GM => Ingreso - Costo;
-    public decimal GMPorcentaje => Ingreso != 0 ? GM / Ingreso : 0;
-    public decimal TarifaEntrega => Horas != 0 ? Ingreso / Horas : 0;
+    [NotMapped] public decimal Ingreso        => IngresoReal + IngresoPlaneado;
+    [NotMapped] public decimal Costo          => CostoReal + CostoPlaneado;
+    [NotMapped] public decimal GM             => Ingreso - Costo;
+    [NotMapped] public decimal GMPorcentaje   => Ingreso != 0 ? GM / Ingreso : 0;
+    [NotMapped] public decimal TarifaEntrega  => Horas != 0 ? Ingreso / Horas : 0;
 }
