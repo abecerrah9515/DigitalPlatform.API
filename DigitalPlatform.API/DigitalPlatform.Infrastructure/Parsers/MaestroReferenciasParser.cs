@@ -179,7 +179,8 @@ public class MaestroReferenciasParser : IMaestroReferenciasParser
         return ws.RowsUsed().Skip(1).Select(fila => new AreaReferenciaDto
         {
             Area = ExcelParserHelper.GetString(fila, colArea),
-            CeBe = ExcelParserHelper.GetString(fila, colCebe),
+            // La celda puede tener "7310106 - AMS SAP" — extraemos solo el código
+            CeBe = ExcelParserHelper.GetString(fila, colCebe).Split('-')[0].Trim(),
         }).Where(r => !string.IsNullOrWhiteSpace(r.Area)).ToList();
     }
 }
