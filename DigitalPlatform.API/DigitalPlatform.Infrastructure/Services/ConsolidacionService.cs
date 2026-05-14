@@ -128,8 +128,14 @@ public class ConsolidacionService : IConsolidacionService
                 ?? new MaestroReferenciasDto();
             log.RegistrosExitosos++; await _db.SaveChangesAsync();
 
-            // ── Step 2b: persistir tasas COP y USD en TiposCambio ───────────
+            // ── Step 2b: persistir tasas COP en TiposCambio ─────────────────
             await PersistirTiposCambioAsync(tdcRegistros ?? []);
+
+            // Lookup local de tasas para normalizar Planeación COP → USD en Step 5
+            var tdcDict = (tdcRegistros ?? [])
+                .Where(r => r.TasaCop > 0)
+                .GroupBy(r => (r.Año, r.Mes))
+                .ToDictionary(g => g.Key, g => g.First().TasaCop);
 
             // ── Step 3: construir lookups desde el Maestro de referencias ────
             // TryAdd en todos los dicts para tolerar duplicados en el maestro (toma el primero)
@@ -177,6 +183,8 @@ public class ConsolidacionService : IConsolidacionService
             }
 
             // ── Step 5: agregar Planeación → IngresoPlaneado / CostoPlaneado ─
+            // Planeación tiene valores en COP → convertir a USD dividiendo por TasaCop del TDC.
+            // Si no hay tasa para el período se guarda el valor COP sin conversión (fallback seguro).
             var planAgg = new Dictionary<ClaveProyecto, PlanBucket>();
 
             foreach (var r in (planeacionRegistros ?? []).Where(r => !string.IsNullOrWhiteSpace(r.Proyecto)))
@@ -185,9 +193,12 @@ public class ConsolidacionService : IConsolidacionService
                 var prev  = planAgg.GetValueOrDefault(clave)
                             ?? new PlanBucket(0m, 0m, string.Empty, string.Empty, string.Empty, string.Empty);
 
+                tdcDict.TryGetValue((r.Año, r.Mes), out var tasaCop);
+                var divisor = tasaCop > 0 ? tasaCop : 1m;
+
                 planAgg[clave] = new PlanBucket(
-                    IngresoPlaneado : prev.IngresoPlaneado + r.IngresoPrevistoEur,
-                    CostoPlaneado   : prev.CostoPlaneado   + r.CostePrevistoEur,
+                    IngresoPlaneado : prev.IngresoPlaneado + r.IngresoPrevistoEur / divisor,
+                    CostoPlaneado   : prev.CostoPlaneado   + r.CostePrevistoEur   / divisor,
                     Cliente         : r.Cliente    ?? string.Empty,
                     Cebe            : r.Cebe       ?? string.Empty,
                     Industria       : r.Industria  ?? string.Empty,
@@ -233,22 +244,16 @@ public class ConsolidacionService : IConsolidacionService
                         : p?.Cebe ?? string.Empty;
 
                     var cebeNombre = rawCebe;
-                    var cebeGroup  = string.Empty;
                     if (!string.IsNullOrWhiteSpace(rawCebe) && cebeDict.TryGetValue(rawCebe, out var cebeRef))
-                    {
                         cebeNombre = cebeRef.Nombre;
-                        cebeGroup  = cebeRef.CeBeGroup; // CeBeGroup IS el nombre display de la vertical
-                    }
 
                     // Industria = CodIndustria de la fuente (e.g. "Z01")
                     var industria = p?.Industria ?? string.Empty;
 
-                    // Vertical = nombre display (= CeBeGroup); fallback a lookup industria → nombre; último recurso: código crudo
-                    var vertical = !string.IsNullOrWhiteSpace(cebeGroup)
-                        ? cebeGroup
-                        : (industriaDict.TryGetValue(industria, out var vNombre) ? vNombre : industria);
+                    // Vertical viene del código de industria → Maestro.Industrias (confirmado por analista)
+                    var vertical = industriaDict.TryGetValue(industria, out var vNombre) ? vNombre : industria;
 
-                    // Resolver Area via CeBe → Areas
+                    // Area viene del CeBe → Maestro.Areas (confirmado por analista)
                     var area = string.Empty;
                     if (!string.IsNullOrWhiteSpace(rawCebe))
                         areaDict.TryGetValue(rawCebe, out area!);

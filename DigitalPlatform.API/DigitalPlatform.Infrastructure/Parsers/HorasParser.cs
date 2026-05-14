@@ -13,8 +13,8 @@ public class HorasParser : IHorasParser
     // Columnas mínimas requeridas según HUE-02
     private static readonly string[] _columnasRequeridas =
     [
-        "trabajador_id", "trabajador_nombre", "trabajador_ceco",
-        "proyecto", "trabajador_sociedad_fi", "proyecto_industria",
+        "trabajador_id_softtek", "trabajador_nombre", "trabajador_ceco",
+        "proyecto", "proyecto_sociedad_fi", "proyecto_industria",
         "ano", "mes", "horas", "estado", "brm"
     ];
 
@@ -55,11 +55,11 @@ public class HorasParser : IHorasParser
 
                 resultado.Add(new RegistroHorasDto
                 {
-                    TrabajadorId = ExcelParserHelper.GetString(row, "trabajador_id"),
+                    TrabajadorId = ExcelParserHelper.GetString(row, "trabajador_id_softtek"),
                     Nombre       = ExcelParserHelper.GetString(row, "trabajador_nombre"),
                     Ceco         = ExcelParserHelper.GetString(row, "trabajador_ceco"),
                     Proyecto     = ExcelParserHelper.GetString(row, "proyecto"),
-                    Sociedad     = ExcelParserHelper.GetString(row, "trabajador_sociedad_fi"),
+                    Sociedad     = ExcelParserHelper.GetString(row, "proyecto_sociedad_fi"),
                     Industria    = ExcelParserHelper.GetString(row, "proyecto_industria"),
                     Año          = ExcelParserHelper.GetInt(row, "ano"),
                     Mes          = ExcelParserHelper.GetInt(row, "mes"),
