@@ -64,48 +64,69 @@ public class ConsolidacionService : IConsolidacionService
         string  Responsable);
 
     // ════════════════════════════════════════════════════════════════════════
-    // IniciarConsolidacionAsync
+    // CrearLogAsync — crea el log con estado Procesando y retorna su Id
     // ════════════════════════════════════════════════════════════════════════
-    public async Task<ApiResponse<ConsolidacionIniciadaDto>> IniciarConsolidacionAsync(string iniciadoPor)
+    public async Task<int> CrearLogAsync(string iniciadoPor)
     {
-        var warnings      = new List<string>();
-        var fuentesEstado = new List<FuenteEstadoDto>();
-
-        // ── Step 1: persist ConsolidacionLog para obtener el Id ─────────────
         var log = new ConsolidacionLog
         {
-            FechaInicio = DateTime.UtcNow,
-            Estado      = EstadoConsolidacion.Exitoso, // se actualiza al final
-            IniciadoPor = iniciadoPor
+            FechaInicio    = DateTime.UtcNow,
+            Estado         = EstadoConsolidacion.Procesando,
+            IniciadoPor    = iniciadoPor,
+            TotalRegistros = 5, // 5 parsers = unidad de progreso inicial
         };
         _db.ConsolidacionLogs.Add(log);
         await _db.SaveChangesAsync();
+
+        _logger.LogInformation("ConsolidacionService: log {Id} creado con estado Procesando.", log.Id);
+        return log.Id;
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // IniciarConsolidacionAsync — corre en background; recibe el Id del log
+    // ════════════════════════════════════════════════════════════════════════
+    public async Task IniciarConsolidacionAsync(int consolidacionId)
+    {
+        var log = await _db.ConsolidacionLogs.FindAsync(consolidacionId);
+        if (log is null)
+        {
+            _logger.LogError("ConsolidacionService: log {Id} no encontrado.", consolidacionId);
+            return;
+        }
+
+        var warnings      = new List<string>();
+        var fuentesEstado = new List<FuenteEstadoDto>();
 
         try
         {
             var rutaBase = _config["ConsolidacionArchivos:RutaBase"] ?? string.Empty;
 
-            // ── Step 2: parsear los 5 archivos Excel ──────────────────────────
+            // ── Step 2: parsear los 5 archivos Excel — actualizar progreso tras cada uno ──
             var gr55Registros = await ParsearArchivo(
                 Path.Combine(rutaBase, _config["ConsolidacionArchivos:GR55"]               ?? "GR55.xlsx"),
                 _gr55Parser.ParsearAsync, "GR55", fuentesEstado, warnings);
+            log.RegistrosExitosos++; await _db.SaveChangesAsync();
 
             var horasRegistros = await ParsearArchivo(
                 Path.Combine(rutaBase, _config["ConsolidacionArchivos:Horas"]              ?? "Horas.xlsx"),
                 _horasParser.ParsearAsync, "Horas", fuentesEstado, warnings);
+            log.RegistrosExitosos++; await _db.SaveChangesAsync();
 
             var planeacionRegistros = await ParsearArchivo(
                 Path.Combine(rutaBase, _config["ConsolidacionArchivos:Planeacion"]         ?? "Planeacion.xlsx"),
                 _planeacionParser.ParsearAsync, "Planeacion", fuentesEstado, warnings);
+            log.RegistrosExitosos++; await _db.SaveChangesAsync();
 
             var tdcRegistros = await ParsearArchivo(
                 Path.Combine(rutaBase, _config["ConsolidacionArchivos:TipoCambio"]         ?? "TDC.xlsx"),
                 _tipoCambioParser.ParsearAsync, "TipoCambio", fuentesEstado, warnings);
+            log.RegistrosExitosos++; await _db.SaveChangesAsync();
 
             var maestro = await ParsearArchivo(
                 Path.Combine(rutaBase, _config["ConsolidacionArchivos:MaestroReferencias"] ?? "MaestroReferencias.xlsx"),
                 _maestroParser.ParsearAsync, "MaestroReferencias", fuentesEstado, warnings)
                 ?? new MaestroReferenciasDto();
+            log.RegistrosExitosos++; await _db.SaveChangesAsync();
 
             // ── Step 2b: persistir tasas COP y USD en TiposCambio ───────────
             await PersistirTiposCambioAsync(tdcRegistros ?? []);
@@ -266,7 +287,7 @@ public class ConsolidacionService : IConsolidacionService
 
             _db.Proyectos.AddRange(proyectos);
 
-            // ── Determinar estado final ───────────────────────────────────────
+            // ── Determinar estado final y sobrescribir contadores con filas reales ──
             var estado = exitosos == 0
                 ? EstadoConsolidacion.Fallido
                 : fallidos > 0 || warnings.Count > 0
@@ -287,26 +308,20 @@ public class ConsolidacionService : IConsolidacionService
             _logger.LogInformation(
                 "Consolidación {Id} completada: {Exitosos} proyectos, {Fallidos} errores, estado={Estado}",
                 log.Id, exitosos, fallidos, estado);
-
-            return ApiResponse<ConsolidacionIniciadaDto>.Ok(
-                new ConsolidacionIniciadaDto
-                {
-                    ConsolidacionId = log.Id,
-                    FechaInicio     = log.FechaInicio,
-                    Estado          = log.Estado.ToString()
-                },
-                $"Consolidación completada: {exitosos} proyectos procesados.");
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "ConsolidacionService: error fatal en consolidación {Id}", log.Id);
+            _logger.LogError(ex, "ConsolidacionService: error fatal en consolidación {Id}", consolidacionId);
 
-            log.FechaFin = DateTime.UtcNow;
-            log.Estado   = EstadoConsolidacion.Fallido;
-            log.Errores  = JsonSerializer.Serialize(new[] { ex.Message });
-            await _db.SaveChangesAsync();
-
-            return ApiResponse<ConsolidacionIniciadaDto>.Fail($"Error fatal: {ex.Message}");
+            // Recargar log si fue desasociado por el error
+            var logFatal = await _db.ConsolidacionLogs.FindAsync(consolidacionId);
+            if (logFatal is not null)
+            {
+                logFatal.FechaFin = DateTime.UtcNow;
+                logFatal.Estado   = EstadoConsolidacion.Fallido;
+                logFatal.Errores  = JsonSerializer.Serialize(new[] { ex.Message });
+                await _db.SaveChangesAsync();
+            }
         }
     }
 

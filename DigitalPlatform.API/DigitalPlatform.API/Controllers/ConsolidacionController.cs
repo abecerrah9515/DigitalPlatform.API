@@ -12,18 +12,35 @@ public class ConsolidacionController : ControllerBase
 {
     private readonly IConsolidacionService _consolidacionService;
     private readonly IConfiguration _config;
+    private readonly IServiceScopeFactory _scopeFactory;
 
-    public ConsolidacionController(IConsolidacionService consolidacionService, IConfiguration config)
+    public ConsolidacionController(
+        IConsolidacionService consolidacionService,
+        IConfiguration config,
+        IServiceScopeFactory scopeFactory)
     {
         _consolidacionService = consolidacionService;
         _config               = config;
+        _scopeFactory         = scopeFactory;
+    }
+
+    // ── Helper: lanza consolidación en background con scope DI propio ────────
+    // Necesario para que el DbContext no sea el del request (que se dispone al retornar).
+    private void LanzarEnBackground(int consolidacionId)
+    {
+        _ = Task.Run(async () =>
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var svc = scope.ServiceProvider.GetRequiredService<IConsolidacionService>();
+            await svc.IniciarConsolidacionAsync(consolidacionId);
+        });
     }
 
     // POST api/consolidacion/upload
     [HttpPost("upload")]
     [RequestSizeLimit(536_870_912)] // 512 MB
     [RequestFormLimits(MultipartBodyLengthLimit = 536_870_912)]
-    public async Task<ActionResult<ApiResponse<ConsolidacionIniciadaDto>>> Upload(
+    public async Task<ActionResult<ApiResponse<object>>> Upload(
         IFormFile gr55,
         IFormFile horas,
         IFormFile planeacion,
@@ -39,10 +56,10 @@ public class ConsolidacionController : ControllerBase
         if (maestroReferencias is null) faltantes.Add("maestroReferencias");
 
         if (faltantes.Count > 0)
-            return BadRequest(ApiResponse<ConsolidacionIniciadaDto>.Fail(
+            return BadRequest(ApiResponse<object>.Fail(
                 $"Faltan los siguientes archivos: {string.Join(", ", faltantes)}."));
 
-        // ── 2. Validar extensión .xlsx en los 5 archivos ────────────────────
+        // ── 2. Validar extensión .xlsx ───────────────────────────────────────
         var archivos = new Dictionary<string, IFormFile>
         {
             ["gr55"]               = gr55!,
@@ -59,7 +76,7 @@ public class ConsolidacionController : ControllerBase
             .ToList();
 
         if (noXlsx.Count > 0)
-            return BadRequest(ApiResponse<ConsolidacionIniciadaDto>.Fail(
+            return BadRequest(ApiResponse<object>.Fail(
                 $"Los siguientes archivos no tienen extensión .xlsx: {string.Join(", ", noXlsx)}."));
 
         // ── 3. Obtener / crear directorio base ───────────────────────────────
@@ -84,17 +101,25 @@ public class ConsolidacionController : ControllerBase
             await archivo.CopyToAsync(fs);
         }
 
-        // ── 5. Iniciar consolidación y retornar resultado ────────────────────
-        var resultado = await _consolidacionService.IniciarConsolidacionAsync("sistema");
-        return Ok(resultado);
+        // ── 5. Crear log y lanzar consolidación en background ────────────────
+        var consolidacionId = await _consolidacionService.CrearLogAsync("sistema");
+        LanzarEnBackground(consolidacionId);
+
+        return Ok(ApiResponse<object>.Ok(
+            new { ConsolidacionId = consolidacionId, Estado = "Procesando" },
+            "Consolidación iniciada. Consulta GET /api/consolidacion/{id}/estado para ver el progreso."));
     }
 
     // POST api/consolidacion/iniciar
     [HttpPost("iniciar")]
-    public async Task<ActionResult<ApiResponse<ConsolidacionIniciadaDto>>> Iniciar()
+    public async Task<ActionResult<ApiResponse<object>>> Iniciar()
     {
-        var resultado = await _consolidacionService.IniciarConsolidacionAsync("sistema");
-        return Ok(resultado);
+        var consolidacionId = await _consolidacionService.CrearLogAsync("sistema");
+        LanzarEnBackground(consolidacionId);
+
+        return Ok(ApiResponse<object>.Ok(
+            new { ConsolidacionId = consolidacionId, Estado = "Procesando" },
+            "Consolidación iniciada. Consulta GET /api/consolidacion/{id}/estado para ver el progreso."));
     }
 
     // GET api/consolidacion/{id}/estado

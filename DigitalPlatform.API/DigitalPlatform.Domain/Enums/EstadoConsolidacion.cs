@@ -4,5 +4,6 @@ public enum EstadoConsolidacion
 {
     Exitoso,
     ParcialmenteExitoso,
-    Fallido
+    Fallido,
+    Procesando
 }
