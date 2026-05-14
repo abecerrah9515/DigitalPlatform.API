@@ -597,11 +597,65 @@ public class ProyectoService : IProyectoService
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    // Implementaciones existentes (ProyectosController / ProyectoFiltroDto)
+    // GET /api/proyectos — tabla paginada 15 columnas (Task 21)
     // ════════════════════════════════════════════════════════════════════════
-    public Task<ApiResponse<PagedResult<ProyectoDto>>> ObtenerProyectosAsync(ProyectoFiltroDto filtro)
-        => Task.FromResult(ApiResponse<PagedResult<ProyectoDto>>.Ok(new PagedResult<ProyectoDto>(),
-               "Usar GET /api/proyectos con ProyectoFiltros (Task 16)."));
+    public async Task<ApiResponse<PagedResult<ProyectoDto>>> ObtenerProyectosAsync(ProyectoFiltroDto filtro)
+    {
+        var f = new ProyectoFiltros
+        {
+            Moneda      = filtro.Moneda ?? "COP",
+            Año         = filtro.Año.HasValue         ? [filtro.Año.Value]         : null,
+            Mes         = filtro.Mes.HasValue         ? [filtro.Mes.Value]         : null,
+            Cliente     = filtro.Cliente     != null  ? [filtro.Cliente]           : null,
+            CodProyecto = filtro.CodProyecto != null  ? [filtro.CodProyecto]       : null,
+            Vertical    = filtro.Industria   != null  ? [filtro.Industria]         : null,
+            Area        = filtro.Area        != null  ? [filtro.Area]              : null,
+            Pais        = filtro.Sociedad    != null  ? [filtro.Sociedad]          : null,
+        };
+
+        var (datos, hayDatos) = await CargarDatosAsync(f);
+        if (!hayDatos)
+            return ApiResponse<PagedResult<ProyectoDto>>.Ok(new PagedResult<ProyectoDto>(), "Sin datos disponibles.");
+
+        var pagina = Math.Max(1, filtro.Pagina);
+        var tamaño = Math.Clamp(filtro.TamañoPagina, 1, 100);
+        var total  = datos.Count;
+
+        var items = datos
+            .Skip((pagina - 1) * tamaño)
+            .Take(tamaño)
+            .Select(d => new ProyectoDto
+            {
+                Año           = d.Año,
+                Mes           = d.Mes,
+                Industria     = d.Industria,
+                Cliente       = d.Cliente,
+                CodProyecto   = d.CodProyecto,
+                CeBe          = d.CeBe,
+                Responsable   = d.Responsable,
+                Area          = d.Area,
+                Sociedad      = d.Sociedad,
+                Ingreso       = Math.Round(d.IngresoReal    * d.Factor, 2),
+                Costo         = Math.Round(d.CostoReal      * d.Factor, 2),
+                GM            = Math.Round((d.IngresoReal - d.CostoReal) * d.Factor, 2),
+                GMPorcentaje  = d.IngresoReal != 0
+                                    ? Math.Round((d.IngresoReal - d.CostoReal) / d.IngresoReal * 100m, 2)
+                                    : 0m,
+                Horas         = d.Horas,
+                TarifaEntrega = d.Horas != 0
+                                    ? Math.Round(d.IngresoReal * d.Factor / d.Horas, 2)
+                                    : 0m,
+            })
+            .ToList();
+
+        return ApiResponse<PagedResult<ProyectoDto>>.Ok(new PagedResult<ProyectoDto>
+        {
+            Items            = items,
+            TotalRegistros   = total,
+            Pagina           = pagina,
+            TamañoPagina     = tamaño,
+        });
+    }
 
     public Task<ApiResponse<KpisDto>> ObtenerKpisAsync(ProyectoFiltroDto filtro)
         => Task.FromResult(ApiResponse<KpisDto>.Ok(new KpisDto(),
