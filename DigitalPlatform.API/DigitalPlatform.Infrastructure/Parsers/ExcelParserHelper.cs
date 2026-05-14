@@ -61,4 +61,20 @@ internal static class ExcelParserHelper
                              CultureInfo.InvariantCulture, out var p) ? p : 0m
         };
     }
+
+    // Valida que todas las columnas requeridas estén presentes en la primera fila.
+    // Lanza InvalidOperationException con la lista de columnas faltantes si alguna falta.
+    // El llamador (ParsearArchivo en ConsolidacionService) atrapa la excepción, la registra
+    // como "Fallido" y continúa con los demás archivos sin detener la consolidación.
+    internal static void ValidarColumnas(
+        IEnumerable<string> presentes,
+        string[]            requeridas,
+        string              nombreArchivo)
+    {
+        var presentesSet = new HashSet<string>(presentes, StringComparer.OrdinalIgnoreCase);
+        var faltantes    = requeridas.Where(r => !presentesSet.Contains(r)).ToList();
+        if (faltantes.Count > 0)
+            throw new InvalidOperationException(
+                $"{nombreArchivo}: columnas requeridas no encontradas — {string.Join(", ", faltantes)}");
+    }
 }

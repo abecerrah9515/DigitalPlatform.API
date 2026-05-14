@@ -9,6 +9,14 @@ public class PlaneacionParser : IPlaneacionParser
 {
     private const string HojaOrigen = "qData";
 
+    // Columnas mínimas requeridas según HUE-02
+    private static readonly string[] _columnasRequeridas =
+    [
+        "cliente", "proyecto", "ano", "mes",
+        "ingreso_previsto_eur", "coste_previsto_eur",
+        "cebe", "industria", "brm", "responsable_wbs"
+    ];
+
     private readonly ILogger<PlaneacionParser> _logger;
 
     public PlaneacionParser(ILogger<PlaneacionParser> logger) => _logger = logger;
@@ -22,14 +30,11 @@ public class PlaneacionParser : IPlaneacionParser
             s.Equals(HojaOrigen, StringComparison.OrdinalIgnoreCase));
 
         if (hoja is null)
-        {
-            _logger.LogWarning("Planeación: no se encontró la hoja '{Sheet}'.", HojaOrigen);
-            return Task.FromResult(resultado);
-        }
+            throw new InvalidOperationException(
+                $"Arch.Planeacion: no se encontró la hoja requerida '{HojaOrigen}'.");
 
         var filas    = archivo.Query(useHeaderRow: true, sheetName: hoja);
         var validado = false;
-        var omitir   = false;
 
         foreach (IDictionary<string, object> fila in filas)
         {
@@ -38,14 +43,8 @@ public class PlaneacionParser : IPlaneacionParser
             if (!validado)
             {
                 validado = true;
-                if (!row.ContainsKey("cliente") || !row.ContainsKey("proyecto"))
-                {
-                    _logger.LogWarning("Planeación: columnas requeridas no encontradas en '{Sheet}'.", HojaOrigen);
-                    omitir = true;
-                }
+                ExcelParserHelper.ValidarColumnas(row.Keys, _columnasRequeridas, "Arch.Planeacion");
             }
-
-            if (omitir) break;
 
             try
             {

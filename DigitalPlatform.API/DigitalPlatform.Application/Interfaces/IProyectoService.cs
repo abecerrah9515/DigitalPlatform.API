@@ -15,6 +15,12 @@ public interface IProyectoService
     // ── Task 16 — KPIs (GET /api/kpis) ──────────────────────────────────────
     Task<ApiResponse<KpisDto>> ObtenerKpisAsync(ProyectoFiltros filtro);
 
+    // ── Task 16 — Filtros dependientes (GET /api/graficas/filtros/valores) ───
+    Task<ApiResponse<FiltrosValoresDto>> ObtenerFiltrosValoresAsync(ProyectoFiltros filtro);
+
+    // ── Task 22 — Descarga Excel (GET /api/graficas/descargar) ───────────────
+    Task<(byte[] Bytes, string NombreArchivo)> DescargarExcelFiltradoAsync(ProyectoFiltros filtro);
+
     // ── Task 16 — 7 gráficas (GET /api/graficas/{nombre}) ───────────────────
     Task<ApiResponse<BarrasApiladasResponseDto>>       GraficaBarrasApiladasAsync(ProyectoFiltros filtro, string agruparPor);
     Task<ApiResponse<PlanVsRealResponseDto>>           GraficaPlanVsRealAsync(ProyectoFiltros filtro);

@@ -222,8 +222,10 @@ public class ConsolidacionService : IConsolidacionService
                     // Industria = CodIndustria de la fuente (e.g. "Z01")
                     var industria = p?.Industria ?? string.Empty;
 
-                    // Vertical = nombre display (= CeBeGroup); fallback a Planeación.Industria
-                    var vertical = !string.IsNullOrWhiteSpace(cebeGroup) ? cebeGroup : industria;
+                    // Vertical = nombre display (= CeBeGroup); fallback a lookup industria → nombre; último recurso: código crudo
+                    var vertical = !string.IsNullOrWhiteSpace(cebeGroup)
+                        ? cebeGroup
+                        : (industriaDict.TryGetValue(industria, out var vNombre) ? vNombre : industria);
 
                     // Resolver Area via CeBe → Areas
                     var area = string.Empty;

@@ -5,6 +5,7 @@ using DigitalPlatform.Domain.Enums;
 using DigitalPlatform.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using MiniExcelLibs;
 
 namespace DigitalPlatform.Infrastructure.Services;
 
@@ -105,55 +106,177 @@ public class ProyectoService : IProyectoService
     // ════════════════════════════════════════════════════════════════════════
     // GET /api/kpis — 5 indicadores (Task 16)
     // ════════════════════════════════════════════════════════════════════════
+    private static readonly string[] _mesesAbr =
+        ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
+
     public async Task<ApiResponse<KpisDto>> ObtenerKpisAsync(ProyectoFiltros filtro)
     {
         var (datos, hayDatos) = await CargarDatosAsync(filtro);
         if (!hayDatos || datos.Count == 0)
             return ApiResponse<KpisDto>.Ok(new KpisDto(), "Sin datos disponibles.");
 
-        var ingresoReal  = datos.Sum(d => d.IngresoReal  * d.Factor);
-        var ingresoPlan  = datos.Sum(d => d.IngresoPlaneado * d.Factor);
-        var costoReal    = datos.Sum(d => d.CostoReal    * d.Factor);
-        var horasTotal   = datos.Sum(d => d.Horas);
-        var gm           = ingresoReal - costoReal;
-        var gmPct        = ingresoReal != 0 ? gm / ingresoReal * 100m : 0m;
-        var tarifa       = horasTotal  != 0 ? ingresoReal / horasTotal : 0m;
-        var cumplimiento = ingresoPlan != 0 ? ingresoReal / ingresoPlan * 100m : 0m;
+        // ── Métricas base ────────────────────────────────────────────────────
+        var ingresoReal   = datos.Sum(d => d.IngresoReal      * d.Factor);
+        var ingresoPlan   = datos.Sum(d => d.IngresoPlaneado   * d.Factor);
+        var costoReal     = datos.Sum(d => d.CostoReal         * d.Factor);
+        var costoPlan     = datos.Sum(d => d.CostoPlaneado     * d.Factor);
+        var horasTotal    = datos.Sum(d => d.Horas);
+        var gm            = ingresoReal - costoReal;
+        var gmPct         = ingresoReal != 0 ? gm / ingresoReal * 100m : 0m;
+        var gmPlanPct     = ingresoPlan != 0 ? (ingresoPlan - costoPlan) / ingresoPlan * 100m : 0m;
+        var gmDelta       = Math.Round(gmPct - gmPlanPct, 1);
+        var tarifa        = horasTotal  != 0 ? ingresoReal / horasTotal : 0m;
+        var cumplimiento  = ingresoPlan != 0 ? ingresoReal / ingresoPlan * 100m : 0m;
+        var cumplDelta    = Math.Round(cumplimiento - 100m, 1);
 
         var monedaLabel = (filtro.Moneda ?? "COP").ToUpperInvariant();
+
+        // ── Proyecto con más horas (badge HorasEntregadas) ───────────────────
+        var proyMasHoras = datos
+            .GroupBy(d => d.CodProyecto)
+            .Select(g => (CodProyecto: g.Key, Horas: g.Sum(d => d.Horas)))
+            .OrderByDescending(x => x.Horas)
+            .FirstOrDefault();
+
+        // ── Proyecto con tarifa más alta (badge TarifaEntregaPromedio) ───────
+        var proyMayorTarifa = datos
+            .GroupBy(d => d.CodProyecto)
+            .Select(g =>
+            {
+                var h = g.Sum(d => d.Horas);
+                return (CodProyecto: g.Key, Tarifa: h != 0 ? g.Sum(d => d.IngresoReal * d.Factor) / h : 0m);
+            })
+            .OrderByDescending(x => x.Tarifa)
+            .FirstOrDefault();
+
+        // ── Rango de meses para subtítulos ───────────────────────────────────
+        var periodos   = datos.Select(d => (d.Año, d.Mes)).Distinct().OrderBy(x => x.Año).ThenBy(x => x.Mes).ToList();
+        var primerPer  = periodos.First();
+        var ultimoPer  = periodos.Last();
+        var añoActivo  = ultimoPer.Año;
+        var mesesEnAño = periodos.Where(p => p.Año == añoActivo).Select(p => p.Mes).Distinct().Count();
+        var esCerrado  = mesesEnAño == 12;
+
+        var subtituloRango = esCerrado
+            ? $"Todos {añoActivo}"
+            : primerPer == ultimoPer
+                ? $"{_mesesAbr[ultimoPer.Mes - 1]} {añoActivo}"
+                : primerPer.Año == ultimoPer.Año
+                    ? $"{_mesesAbr[primerPer.Mes - 1]}–{_mesesAbr[ultimoPer.Mes - 1]} {añoActivo}"
+                    : $"{_mesesAbr[primerPer.Mes - 1]} {primerPer.Año}–{_mesesAbr[ultimoPer.Mes - 1]} {añoActivo}";
+
+        var subtituloGM = $"{_mesesAbr[ultimoPer.Mes - 1]} {añoActivo} | {(esCerrado ? "Total" : añoActivo.ToString())}";
 
         return ApiResponse<KpisDto>.Ok(new KpisDto
         {
             IngresoTotalReal = new KpiItemDto
             {
-                Valor    = Math.Round(ingresoReal, 2),
-                Unidad   = monedaLabel,
-                Semaforo = ingresoReal >= ingresoPlan ? "Verde" : "Rojo",
+                Valor      = Math.Round(ingresoReal, 2),
+                Unidad     = monedaLabel,
+                Semaforo   = ingresoReal >= ingresoPlan ? "Verde" : "Rojo",
+                Tendencia  = ingresoReal >= ingresoPlan ? "Arriba" : "Abajo",
+                BadgeTexto = ingresoReal >= ingresoPlan ? "Sobre plan" : "Bajo plan",
+                Subtitulo  = subtituloRango,
             },
             MargenGM = new KpiItemDto
             {
-                Valor    = Math.Round(gmPct, 2),
-                Unidad   = "%",
-                Semaforo = gmPct >= 40 ? "Verde" : gmPct >= 35 ? "Amarillo" : "Rojo",
+                Valor      = Math.Round(gmPct, 2),
+                Unidad     = "%",
+                Semaforo   = gmPct >= 40 ? "Verde" : gmPct >= 35 ? "Amarillo" : "Rojo",
+                Tendencia  = gmDelta >= 0 ? "Arriba" : "Abajo",
+                BadgeTexto = $"{(gmDelta >= 0 ? "▲" : "▼")} {Math.Abs(gmDelta)} pp vs plan",
+                Subtitulo  = subtituloGM,
             },
             HorasEntregadas = new KpiItemDto
             {
-                Valor    = Math.Round(horasTotal, 2),
-                Unidad   = "h",
-                Semaforo = "Gris",
+                Valor      = Math.Round(horasTotal, 2),
+                Unidad     = "h",
+                Semaforo   = "Gris",
+                Tendencia  = "Neutro",
+                BadgeTexto = proyMasHoras.CodProyecto != default ? proyMasHoras.CodProyecto : "—",
+                Subtitulo  = subtituloGM,
             },
             TarifaEntregaPromedio = new KpiItemDto
             {
-                Valor    = Math.Round(tarifa, 2),
-                Unidad   = monedaLabel,
-                Semaforo = "Gris",
+                Valor      = Math.Round(tarifa, 2),
+                Unidad     = monedaLabel,
+                Semaforo   = "Gris",
+                Tendencia  = "Neutro",
+                BadgeTexto = proyMayorTarifa.CodProyecto != default ? proyMayorTarifa.CodProyecto : "—",
+                Subtitulo  = subtituloGM,
             },
             CumplimientoIngresosPlan = new KpiItemDto
             {
-                Valor    = Math.Round(cumplimiento, 2),
-                Unidad   = "%",
-                Semaforo = cumplimiento >= 100 ? "Verde" : cumplimiento >= 90 ? "Amarillo" : "Rojo",
+                Valor      = Math.Round(cumplimiento, 2),
+                Unidad     = "%",
+                Semaforo   = cumplimiento >= 100 ? "Verde" : cumplimiento >= 90 ? "Amarillo" : "Rojo",
+                Tendencia  = cumplimiento >= 100 ? "Arriba" : "Abajo",
+                BadgeTexto = $"{(cumplDelta >= 0 ? "▲ +" : "▼ ")}{cumplDelta}%",
+                Subtitulo  = subtituloRango,
             },
+        });
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // GET /api/graficas/filtros/valores — filtros dependientes (HUE-03)
+    // Cada dimensión se calcula aplicando todos los filtros activos EXCEPTO
+    // el propio, produciendo cascada: seleccionar cliente limita proyectos, etc.
+    // ════════════════════════════════════════════════════════════════════════
+    public async Task<ApiResponse<FiltrosValoresDto>> ObtenerFiltrosValoresAsync(ProyectoFiltros f)
+    {
+        var ultimoId = await _db.ConsolidacionLogs
+            .Where(l => l.Estado == EstadoConsolidacion.Exitoso)
+            .OrderByDescending(l => l.FechaInicio)
+            .Select(l => (int?)l.Id)
+            .FirstOrDefaultAsync();
+
+        if (ultimoId is null)
+            return ApiResponse<FiltrosValoresDto>.Ok(new FiltrosValoresDto(), "Sin consolidación disponible.");
+
+        var baseQ = _db.Proyectos
+            .Where(p => p.ConsolidacionId == ultimoId)
+            .AsNoTracking();
+
+        // Aplica todos los filtros activos excepto la dimensión indicada.
+        // Esto produce el comportamiento de filtros dependientes (cascada).
+        IQueryable<Domain.Entities.Proyecto> Sin(string excluir)
+        {
+            var q = baseQ;
+            if (excluir != "cliente"  && f.Cliente?.Length    > 0) q = q.Where(p => f.Cliente.Contains(p.Cliente));
+            if (excluir != "proyecto" && f.CodProyecto?.Length > 0) q = q.Where(p => f.CodProyecto.Contains(p.CodProyecto));
+            if (excluir != "vertical" && f.Vertical?.Length   > 0) q = q.Where(p => f.Vertical.Contains(p.Vertical));
+            if (excluir != "area"     && f.Area?.Length        > 0) q = q.Where(p => f.Area.Contains(p.Area));
+            if (excluir != "pais"     && f.Pais?.Length        > 0) q = q.Where(p => f.Pais.Contains(p.Pais));
+            if (excluir != "año"      && f.Año?.Length         > 0) q = q.Where(p => f.Año.Contains(p.Año));
+            if (excluir != "mes"      && f.Mes?.Length         > 0) q = q.Where(p => f.Mes.Contains(p.Mes));
+            return q;
+        }
+
+        // EF Core DbContext no es thread-safe → queries secuenciales
+        var clientes   = await Sin("cliente").Select(p => p.Cliente).Where(v => v != "")
+                             .Distinct().OrderBy(v => v).ToListAsync();
+        var proyectos  = await Sin("proyecto").Select(p => p.CodProyecto).Where(v => v != "")
+                             .Distinct().OrderBy(v => v).ToListAsync();
+        var verticales = await Sin("vertical").Select(p => p.Vertical).Where(v => v != "")
+                             .Distinct().OrderBy(v => v).ToListAsync();
+        var areas      = await Sin("area").Select(p => p.Area).Where(v => v != "")
+                             .Distinct().OrderBy(v => v).ToListAsync();
+        var paises     = await Sin("pais").Select(p => p.Pais).Where(v => v != "")
+                             .Distinct().OrderBy(v => v).ToListAsync();
+        var años       = await Sin("año").Select(p => p.Año)
+                             .Distinct().OrderBy(v => v).ToListAsync();
+        var meses      = await Sin("mes").Select(p => p.Mes)
+                             .Distinct().OrderBy(v => v).ToListAsync();
+
+        return ApiResponse<FiltrosValoresDto>.Ok(new FiltrosValoresDto
+        {
+            Clientes   = clientes,
+            Proyectos  = proyectos,
+            Verticales = verticales,
+            Areas      = areas,
+            Paises     = paises,
+            Años       = años,
+            Meses      = meses,
         });
     }
 
@@ -181,7 +304,7 @@ public class ProyectoService : IProyectoService
             ingPorPeriodoPrev.TryGetValue((prevAño, prevMes), out var ingPrev);
 
             var segmentos = periodo
-                .GroupBy(d => agruparPor == "area" ? d.Area : d.Vertical)
+                .GroupBy(d => agruparPor == "area" ? d.Area : d.Industria)
                 .Select(sg =>
                 {
                     var ing = sg.Sum(d => d.IngresoReal * d.Factor);
@@ -424,6 +547,53 @@ public class ProyectoService : IProyectoService
             .ToList();
 
         return ApiResponse<HeatmapGmResponseDto>.Ok(new HeatmapGmResponseDto { Celdas = celdas });
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // Task 22 — Descarga Excel (HUE-11)
+    // 15 columnas exactas del HUE-11, nombre: reporte_ejecutivo_{moneda}_{YYYY}_{MM}.xlsx
+    // ════════════════════════════════════════════════════════════════════════
+    public async Task<(byte[] Bytes, string NombreArchivo)> DescargarExcelFiltradoAsync(ProyectoFiltros f)
+    {
+        var (datos, _) = await CargarDatosAsync(f);
+
+        var monedaLabel = (f.Moneda ?? "COP").ToUpperInvariant();
+
+        var filas = datos.Select(d => new
+        {
+            Año              = d.Año,
+            Mes              = d.Mes,
+            Industria        = d.Industria,
+            Cliente          = d.Cliente,
+            CodProyecto      = d.CodProyecto,
+            CeBe             = d.CeBe,
+            Responsable      = d.Responsable,
+            Area             = d.Area,
+            Sociedad         = d.Sociedad,
+            Ingreso          = Math.Round((d.IngresoReal + d.IngresoPlaneado) * d.Factor, 2),
+            Costo            = Math.Round((d.CostoReal   + d.CostoPlaneado)   * d.Factor, 2),
+            GM               = Math.Round((d.IngresoReal + d.IngresoPlaneado - d.CostoReal - d.CostoPlaneado) * d.Factor, 2),
+            GMPct            = (d.IngresoReal + d.IngresoPlaneado) * d.Factor != 0
+                                   ? Math.Round(((d.IngresoReal + d.IngresoPlaneado - d.CostoReal - d.CostoPlaneado) * d.Factor)
+                                                / ((d.IngresoReal + d.IngresoPlaneado) * d.Factor) * 100m, 2)
+                                   : 0m,
+            Horas            = d.Horas,
+            TarifaEntrega    = d.Horas != 0
+                                   ? Math.Round((d.IngresoReal + d.IngresoPlaneado) * d.Factor / d.Horas, 2)
+                                   : 0m,
+        }).ToList();
+
+        // Nombre de archivo según HUE-11, usando el último período del dataset
+        var ultimo = datos.Count > 0
+            ? datos.OrderByDescending(d => d.Año).ThenByDescending(d => d.Mes).First()
+            : null;
+        var año  = ultimo?.Año  ?? DateTime.UtcNow.Year;
+        var mes  = ultimo?.Mes  ?? DateTime.UtcNow.Month;
+        var nombreArchivo = $"reporte_ejecutivo_{monedaLabel}_{año}_{mes:D2}.xlsx";
+
+        var stream = new MemoryStream();
+        await stream.SaveAsAsync(filas);
+        return (stream.ToArray(), nombreArchivo);
     }
 
     // ════════════════════════════════════════════════════════════════════════

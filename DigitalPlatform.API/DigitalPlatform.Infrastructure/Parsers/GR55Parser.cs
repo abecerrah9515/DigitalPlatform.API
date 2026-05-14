@@ -12,6 +12,14 @@ public class GR55Parser : IGR55Parser
     private static readonly Regex PepTokenRegex =
         new(@"(?i)\bPEP\s+([\w\-]+)", RegexOptions.Compiled);
 
+    // Columnas mínimas requeridas según HUE-02 (normalizadas: sin tilde, minúsculas)
+    private static readonly string[] _columnasRequeridas =
+    [
+        "soc.receptora", "periodo contable", "ejercicio", "numero de cuenta",
+        "denominacion", "elemento pep", "centro de beneficio", "texto",
+        "en moneda local centro de beneficio", "clave moneda ml cebe"
+    ];
+
     public GR55Parser(ILogger<GR55Parser> logger) => _logger = logger;
 
     public Task<List<RegistroGR55Dto>> ParsearAsync(Stream archivo)
@@ -32,11 +40,10 @@ public class GR55Parser : IGR55Parser
                 if (!validado)
                 {
                     validado = true;
-                    if (!row.ContainsKey("elemento pep") || !row.ContainsKey("texto"))
-                    {
-                        _logger.LogWarning("GR55 hoja '{Sheet}': columnas requeridas no encontradas, se omite.", sheetName);
-                        omitir = true;
-                    }
+                    // Lanza InvalidOperationException si faltan columnas requeridas.
+                    // ParsearArchivo en ConsolidacionService la captura y marca la fuente
+                    // como "Fallido" sin interrumpir la consolidación de los demás archivos.
+                    ExcelParserHelper.ValidarColumnas(row.Keys, _columnasRequeridas, $"Arch.GR55 [{sheetName}]");
                 }
 
                 if (omitir) break;

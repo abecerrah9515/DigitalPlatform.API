@@ -24,9 +24,11 @@ public class TipoCambioParser : ITipoCambioParser
             return Task.FromResult(resultado);
         }
 
+        // Columnas mínimas requeridas según HUE-02: Fecha, T.C.MXN, USD, COP
+        string[] columnasRequeridas = ["fecha", "t.c. mxn", "usd", "cop"];
+
         var filas    = archivo.Query(useHeaderRow: true, sheetName: primerHoja);
         var validado = false;
-        var omitir   = false;
 
         foreach (IDictionary<string, object> fila in filas)
         {
@@ -35,15 +37,8 @@ public class TipoCambioParser : ITipoCambioParser
             if (!validado)
             {
                 validado = true;
-                if (!row.ContainsKey("fecha") || !row.ContainsKey("t.c. mxn"))
-                {
-                    _logger.LogWarning("TDC: columnas requeridas no encontradas. Columnas: {Cols}",
-                        string.Join(", ", row.Keys));
-                    omitir = true;
-                }
+                ExcelParserHelper.ValidarColumnas(row.Keys, columnasRequeridas, "Arch.TDC");
             }
-
-            if (omitir) break;
 
             try
             {

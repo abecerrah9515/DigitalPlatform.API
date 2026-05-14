@@ -14,6 +14,17 @@ public class GraficasController : ControllerBase
     public GraficasController(IProyectoService proyectoService)
         => _proyectoService = proyectoService;
 
+    // GET /api/graficas/filtros/valores
+    // Sin filtros → devuelve todos los valores disponibles.
+    // Con filtros parciales → cada dimensión se calcula sin su propio filtro (cascada).
+    [HttpGet("filtros/valores")]
+    public async Task<ActionResult<ApiResponse<FiltrosValoresDto>>> FiltrosValores(
+        [FromQuery] ProyectoFiltros filtro)
+    {
+        var resultado = await _proyectoService.ObtenerFiltrosValoresAsync(filtro);
+        return Ok(resultado);
+    }
+
     // GET /api/graficas/barras-apiladas?agruparPor=industria
     [HttpGet("barras-apiladas")]
     public async Task<ActionResult<ApiResponse<BarrasApiladasResponseDto>>> BarrasApiladas(
@@ -76,5 +87,17 @@ public class GraficasController : ControllerBase
     {
         var resultado = await _proyectoService.GraficaHeatmapGmAsync(filtro);
         return Ok(resultado);
+    }
+
+    // GET /api/graficas/descargar — Task 22 / HUE-11
+    // Descarga los registros filtrados en Excel (.xlsx) con las 15 columnas acordadas.
+    // Nombre: reporte_ejecutivo_{moneda}_{YYYY}_{MM}.xlsx
+    [HttpGet("descargar")]
+    public async Task<IActionResult> Descargar([FromQuery] ProyectoFiltros filtro)
+    {
+        var (bytes, nombreArchivo) = await _proyectoService.DescargarExcelFiltradoAsync(filtro);
+        return File(bytes,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            nombreArchivo);
     }
 }
