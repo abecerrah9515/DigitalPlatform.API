@@ -24,8 +24,8 @@ public class TipoCambioParser : ITipoCambioParser
             return Task.FromResult(resultado);
         }
 
-        // Columnas mínimas requeridas según HUE-02: Fecha, T.C.MXN, USD, COP
-        string[] columnasRequeridas = ["fecha", "t.c. mxn", "usd", "cop"];
+        // Columnas mínimas requeridas según HUE-02: Fecha, T.C.MXN, tasas
+        string[] columnasRequeridas = ["fecha", "t.c. mxn", "tasas"];
 
         var filas    = archivo.Query(useHeaderRow: true, sheetName: primerHoja);
         var validado = false;
@@ -70,11 +70,8 @@ public class TipoCambioParser : ITipoCambioParser
                     continue;
                 }
 
-                // Leer tasas disponibles: COP y USD (según HU, TDC tiene columnas COP y USD)
-                var tasaCop = ExcelParserHelper.GetDecimal(row, "cop");
-                var tasaUsd = ExcelParserHelper.GetDecimal(row, "usd");
-                // Fallback a columna genérica "tasas" si existe
-                if (tasaCop == 0m) tasaCop = ExcelParserHelper.GetDecimal(row, "tasas");
+                // "tasas" es la tasa COP/USD para convertir USD→COP o COP→USD
+                var tasaCop = ExcelParserHelper.GetDecimal(row, "tasas");
 
                 resultado.Add(new RegistroTipoCambioDto
                 {
@@ -82,7 +79,6 @@ public class TipoCambioParser : ITipoCambioParser
                     Año     = año,
                     Mes     = mes,
                     TasaCop = tasaCop,
-                    TasaUsd = tasaUsd,
                 });
             }
             catch (Exception ex)

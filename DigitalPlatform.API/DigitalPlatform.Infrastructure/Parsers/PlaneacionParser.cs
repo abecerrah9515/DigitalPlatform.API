@@ -5,6 +5,18 @@ using Microsoft.Extensions.Logging;
 
 namespace DigitalPlatform.Infrastructure.Parsers;
 
+// Ayuda a extraer solo el código de campos con formato "CÓDIGO - Descripción" o "Nombre - CÓDIGO"
+file static class PlaneacionCampoHelper
+{
+    // "1-0000034220 - Acerias. Soporte..." → "1-0000034220"
+    internal static string ExtraerPrimerSegmento(string valor) =>
+        valor.Contains(" - ") ? valor.Split(new[] { " - " }, 2, StringSplitOptions.None)[0].Trim() : valor.Trim();
+
+    // "AMS SAP - 7310106" → "7310106"
+    internal static string ExtraerUltimoSegmento(string valor) =>
+        valor.Contains(" - ") ? valor.Split(new[] { " - " }, StringSplitOptions.None)[^1].Trim() : valor.Trim();
+}
+
 public class PlaneacionParser : IPlaneacionParser
 {
     private const string HojaOrigen = "qData";
@@ -48,16 +60,28 @@ public class PlaneacionParser : IPlaneacionParser
 
             try
             {
+                // proyecto: "1-0000034220 - Acerias. Soporte..." → "1-0000034220"
+                var proyecto = PlaneacionCampoHelper.ExtraerPrimerSegmento(
+                    ExcelParserHelper.GetString(row, "proyecto"));
+
+                // cebe: "AMS SAP - 7310106" → "7310106"
+                var cebe = PlaneacionCampoHelper.ExtraerUltimoSegmento(
+                    ExcelParserHelper.GetString(row, "cebe"));
+
+                // industria: "Z09 - Nat. Res, Energy/Ut" → "Z09"
+                var industria = PlaneacionCampoHelper.ExtraerPrimerSegmento(
+                    ExcelParserHelper.GetString(row, "industria"));
+
                 resultado.Add(new RegistroPlaneacionDto
                 {
                     Cliente            = ExcelParserHelper.GetString(row, "cliente"),
-                    Proyecto           = ExcelParserHelper.GetString(row, "proyecto"),
+                    Proyecto           = proyecto,
                     Año                = ExcelParserHelper.GetInt(row, "ano"),
                     Mes                = ExcelParserHelper.GetInt(row, "mes"),
                     IngresoPrevistoEur = ExcelParserHelper.GetDecimal(row, "ingreso_previsto_eur"),
                     CostePrevistoEur   = ExcelParserHelper.GetDecimal(row, "coste_previsto_eur"),
-                    Cebe               = ExcelParserHelper.GetString(row, "cebe"),
-                    Industria          = ExcelParserHelper.GetString(row, "industria"),
+                    Cebe               = cebe,
+                    Industria          = industria,
                     Brm                = ExcelParserHelper.GetString(row, "brm"),
                     ResponsableWbs     = ExcelParserHelper.GetString(row, "responsable_wbs"),
                 });

@@ -103,11 +103,11 @@ public class MaestroReferenciasParser : IMaestroReferenciasParser
 
     private AccountsGroupReferenciaDto? ParseAccountsGroup(Dictionary<string, object?> row)
     {
-        var lineItem = ExcelParserHelper.GetString(row, "lineitemid");
-        return string.IsNullOrWhiteSpace(lineItem) ? null : new AccountsGroupReferenciaDto
+        var account = ExcelParserHelper.GetString(row, "account");
+        return string.IsNullOrWhiteSpace(account) ? null : new AccountsGroupReferenciaDto
         {
-            LineItemId    = lineItem,
-            Account       = ExcelParserHelper.GetString(row, "account"),
+            Account       = account,
+            LineItemId    = ExcelParserHelper.GetString(row, "lineitemid"),
             Clasificacion = ExcelParserHelper.GetString(row, "clasificacion"),
         };
     }

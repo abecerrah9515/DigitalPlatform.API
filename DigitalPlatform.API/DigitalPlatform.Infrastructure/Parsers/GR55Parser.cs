@@ -11,6 +11,9 @@ public class GR55Parser : IGR55Parser
     private readonly ILogger<GR55Parser> _logger;
     private static readonly Regex PepTokenRegex =
         new(@"(?i)\bPEP\s+([\w\-]+)", RegexOptions.Compiled);
+    // Elimina el sufijo WBS (-1, -2, etc.) del Elemento PEP para obtener el código de proyecto raíz
+    private static readonly Regex WbsSufijoRegex =
+        new(@"-\d+$", RegexOptions.Compiled);
 
     // Columnas mínimas requeridas según HUE-02 (normalizadas: sin tilde, minúsculas)
     private static readonly string[] _columnasRequeridas =
@@ -62,6 +65,10 @@ public class GR55Parser : IGR55Parser
                         if (!match.Success) continue;
                         elementoPep = match.Groups[1].Value;
                     }
+
+                    // Normalizar a código de proyecto raíz: "1-0000032365-2" → "1-0000032365"
+                    elementoPep = WbsSufijoRegex.Replace(elementoPep.Trim(), string.Empty);
+                    if (string.IsNullOrWhiteSpace(elementoPep)) continue;
 
                     resultado.Add(new RegistroGR55Dto
                     {

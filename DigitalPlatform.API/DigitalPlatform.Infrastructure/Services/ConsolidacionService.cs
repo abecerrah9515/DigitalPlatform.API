@@ -139,9 +139,10 @@ public class ConsolidacionService : IConsolidacionService
 
             // ── Step 3: construir lookups desde el Maestro de referencias ────
             // TryAdd en todos los dicts para tolerar duplicados en el maestro (toma el primero)
+            // Clave = LineItemId (número SAP como "51120001") — coincide con GR55.NumeroCuenta
             var cuentaClasif = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var a in maestro.AccountsGroups.Where(a => !string.IsNullOrWhiteSpace(a.Account)))
-                cuentaClasif.TryAdd(a.Account.Trim(), a.Clasificacion.Trim());
+            foreach (var a in maestro.AccountsGroups.Where(a => !string.IsNullOrWhiteSpace(a.LineItemId)))
+                cuentaClasif.TryAdd(a.LineItemId.Trim(), a.Clasificacion.Trim());
 
             var cebeDict = new Dictionary<string, CeBeReferenciaDto>(StringComparer.OrdinalIgnoreCase);
             foreach (var c in maestro.CeBes.Where(c => !string.IsNullOrWhiteSpace(c.CeBe)))
@@ -175,35 +176,45 @@ public class ConsolidacionService : IConsolidacionService
 
                 var esIngreso = clasif?.Equals("Ingreso", StringComparison.OrdinalIgnoreCase) == true;
 
+                // valor = SAP_value × -1: ingresos vienen negativos en SAP → quedan positivos;
+                // costos vienen positivos en SAP → quedan negativos. Se niegan al acumular para
+                // que CostoReal sea positivo y los ajustes/notas de crédito reduzcan correctamente.
                 gr55Agg[clave] = new Gr55Bucket(
-                    IngresoReal     : prev.IngresoReal + (esIngreso ? valor : 0m),
-                    CostoReal       : prev.CostoReal   + (esIngreso ? 0m : valor),
+                    IngresoReal     : prev.IngresoReal + (esIngreso ?  valor : 0m),
+                    CostoReal       : prev.CostoReal   + (esIngreso ? 0m : -valor),
                     SocReceptora    : r.SocReceptora,
                     CentroBeneficio : r.CentroBeneficio);
             }
 
             // ── Step 5: agregar Planeación → IngresoPlaneado / CostoPlaneado ─
             // Planeación tiene valores en COP → convertir a USD dividiendo por TasaCop del TDC.
-            // Si no hay tasa para el período se guarda el valor COP sin conversión (fallback seguro).
+            // Si no existe tasa para el período se omite ese registro y se genera un warning.
             var planAgg = new Dictionary<ClaveProyecto, PlanBucket>();
+            var periodosSinTasa = new HashSet<(int Año, int Mes)>();
 
             foreach (var r in (planeacionRegistros ?? []).Where(r => !string.IsNullOrWhiteSpace(r.Proyecto)))
             {
+                if (!tdcDict.TryGetValue((r.Año, r.Mes), out var tasaCop) || tasaCop <= 0)
+                {
+                    periodosSinTasa.Add((r.Año, r.Mes));
+                    continue;
+                }
+
                 var clave = new ClaveProyecto(r.Proyecto.Trim(), r.Año, r.Mes);
                 var prev  = planAgg.GetValueOrDefault(clave)
                             ?? new PlanBucket(0m, 0m, string.Empty, string.Empty, string.Empty, string.Empty);
 
-                tdcDict.TryGetValue((r.Año, r.Mes), out var tasaCop);
-                var divisor = tasaCop > 0 ? tasaCop : 1m;
-
                 planAgg[clave] = new PlanBucket(
-                    IngresoPlaneado : prev.IngresoPlaneado + r.IngresoPrevistoEur / divisor,
-                    CostoPlaneado   : prev.CostoPlaneado   + r.CostePrevistoEur   / divisor,
+                    IngresoPlaneado : prev.IngresoPlaneado + r.IngresoPrevistoEur / tasaCop,
+                    CostoPlaneado   : prev.CostoPlaneado   + r.CostePrevistoEur   / tasaCop,
                     Cliente         : r.Cliente    ?? string.Empty,
                     Cebe            : r.Cebe       ?? string.Empty,
                     Industria       : r.Industria  ?? string.Empty,
                     Responsable     : r.ResponsableWbs ?? string.Empty);
             }
+
+            foreach (var (año, mes) in periodosSinTasa.OrderBy(x => x.Año).ThenBy(x => x.Mes))
+                warnings.Add($"Planeación {año}/{mes:D2}: sin tasa TDC — registros de ese período omitidos (no se puede convertir COP→USD).");
 
             // ── Step 6: agregar Horas por (Proyecto, Año, Mes) ───────────────
             var horasAgg = new Dictionary<ClaveProyecto, decimal>();

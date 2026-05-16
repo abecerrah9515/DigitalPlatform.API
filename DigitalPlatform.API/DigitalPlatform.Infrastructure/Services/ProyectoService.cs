@@ -47,15 +47,17 @@ public class ProyectoService : IProyectoService
     // ════════════════════════════════════════════════════════════════════════
     private async Task<(List<Flat> datos, bool hayDatos)> CargarDatosAsync(ProyectoFiltros f)
     {
+        var estadosValidos = new[] { EstadoConsolidacion.Exitoso, EstadoConsolidacion.ParcialmenteExitoso };
+
         var ultimoId = await _db.ConsolidacionLogs
-            .Where(l => l.Estado == EstadoConsolidacion.Exitoso)
+            .Where(l => estadosValidos.Contains(l.Estado))
             .OrderByDescending(l => l.FechaInicio)
             .Select(l => (int?)l.Id)
             .FirstOrDefaultAsync();
 
         if (ultimoId is null)
         {
-            _logger.LogWarning("ProyectoService: sin consolidación exitosa.");
+            _logger.LogWarning("ProyectoService: sin consolidación exitosa o parcialmente exitosa.");
             return ([], false);
         }
 
@@ -111,9 +113,26 @@ public class ProyectoService : IProyectoService
 
     public async Task<ApiResponse<KpisDto>> ObtenerKpisAsync(ProyectoFiltros filtro)
     {
-        var (datos, hayDatos) = await CargarDatosAsync(filtro);
-        if (!hayDatos || datos.Count == 0)
+        // KPIs = YTD del año activo (HUE-04): cargar sin filtro temporal para determinar el período
+        var filtroSinPeriodo = filtro with { Año = null, Mes = null };
+        var (todosDatos, hayDatos) = await CargarDatosAsync(filtroSinPeriodo);
+        if (!hayDatos || todosDatos.Count == 0)
             return ApiResponse<KpisDto>.Ok(new KpisDto(), "Sin datos disponibles.");
+
+        // Año activo = max del filtro de usuario o max disponible
+        var añoActivo = filtro.Año?.Length > 0
+            ? filtro.Año.Max()
+            : todosDatos.Max(d => d.Año);
+
+        // Mes activo = max del filtro de usuario o max mes disponible del año activo
+        var mesActivo = filtro.Mes?.Length > 0
+            ? filtro.Mes.Max()
+            : todosDatos.Where(d => d.Año == añoActivo).Max(d => d.Mes);
+
+        // Acumulado YTD: año activo, desde mes 1 hasta mes activo
+        var datos = todosDatos.Where(d => d.Año == añoActivo && d.Mes <= mesActivo).ToList();
+        if (datos.Count == 0)
+            return ApiResponse<KpisDto>.Ok(new KpisDto(), "Sin datos para el período activo.");
 
         // ── Métricas base ────────────────────────────────────────────────────
         var ingresoReal   = datos.Sum(d => d.IngresoReal      * d.Factor);
@@ -153,8 +172,7 @@ public class ProyectoService : IProyectoService
         var periodos   = datos.Select(d => (d.Año, d.Mes)).Distinct().OrderBy(x => x.Año).ThenBy(x => x.Mes).ToList();
         var primerPer  = periodos.First();
         var ultimoPer  = periodos.Last();
-        var añoActivo  = ultimoPer.Año;
-        var mesesEnAño = periodos.Where(p => p.Año == añoActivo).Select(p => p.Mes).Distinct().Count();
+        var mesesEnAño = periodos.Select(p => p.Mes).Distinct().Count();
         var esCerrado  = mesesEnAño == 12;
 
         var subtituloRango = esCerrado
@@ -224,8 +242,10 @@ public class ProyectoService : IProyectoService
     // ════════════════════════════════════════════════════════════════════════
     public async Task<ApiResponse<FiltrosValoresDto>> ObtenerFiltrosValoresAsync(ProyectoFiltros f)
     {
+        var estadosValidos = new[] { EstadoConsolidacion.Exitoso, EstadoConsolidacion.ParcialmenteExitoso };
+
         var ultimoId = await _db.ConsolidacionLogs
-            .Where(l => l.Estado == EstadoConsolidacion.Exitoso)
+            .Where(l => estadosValidos.Contains(l.Estado))
             .OrderByDescending(l => l.FechaInicio)
             .Select(l => (int?)l.Id)
             .FirstOrDefaultAsync();
