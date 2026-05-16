@@ -94,11 +94,19 @@ public class ConsolidacionController : ControllerBase
             ["maestroReferencias"] = _config["ConsolidacionArchivos:MaestroReferencias"] ?? "MaestroReferencias.xlsx",
         };
 
-        foreach (var (clave, archivo) in archivos)
+        try
         {
-            var destino = Path.Combine(rutaBase, mapaNombres[clave]);
-            await using var fs = System.IO.File.Create(destino);
-            await archivo.CopyToAsync(fs);
+            foreach (var (clave, archivo) in archivos)
+            {
+                var destino = Path.Combine(rutaBase, mapaNombres[clave]);
+                await using var fs = new FileStream(destino, FileMode.Create, FileAccess.Write, FileShare.Read);
+                await archivo.CopyToAsync(fs);
+            }
+        }
+        catch (IOException)
+        {
+            return Conflict(ApiResponse<object>.Fail(
+                "Uno o más archivos están en uso por una consolidación en progreso. Espera a que termine e intenta nuevamente."));
         }
 
         // ── 5. Crear log y lanzar consolidación en background ────────────────
