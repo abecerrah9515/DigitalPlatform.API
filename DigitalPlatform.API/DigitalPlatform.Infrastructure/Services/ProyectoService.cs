@@ -119,15 +119,19 @@ public class ProyectoService : IProyectoService
         if (!hayDatos || todosDatos.Count == 0)
             return ApiResponse<KpisDto>.Ok(new KpisDto(), "Sin datos disponibles.");
 
-        // Año activo = max del filtro de usuario o max disponible
+        // Año activo = filtro del usuario, o el año en curso (HUE-04: YTD del año activo)
         var añoActivo = filtro.Año?.Length > 0
             ? filtro.Año.Max()
-            : todosDatos.Max(d => d.Año);
+            : DateTime.Now.Year;
 
-        // Mes activo = max del filtro de usuario o max mes disponible del año activo
+        // Si no hay datos para el año en curso, caer al máximo disponible
+        if (!todosDatos.Any(d => d.Año == añoActivo))
+            añoActivo = todosDatos.Max(d => d.Año);
+
+        // Mes activo = filtro del usuario, o el mes en curso (YTD hasta hoy)
         var mesActivo = filtro.Mes?.Length > 0
             ? filtro.Mes.Max()
-            : todosDatos.Where(d => d.Año == añoActivo).Max(d => d.Mes);
+            : DateTime.Now.Month;
 
         // Acumulado YTD: año activo, desde mes 1 hasta mes activo
         var datos = todosDatos.Where(d => d.Año == añoActivo && d.Mes <= mesActivo).ToList();
@@ -360,10 +364,12 @@ public class ProyectoService : IProyectoService
         if (datos.Count == 0)
             return ApiResponse<PlanVsRealResponseDto>.Ok(new PlanVsRealResponseDto());
 
-        // Año activo = año del filtro (primer valor) o máximo del conjunto
+        // Año activo = filtro del usuario, o el año en curso (HUE-04)
         var añoActivo = filtro.Año?.FirstOrDefault() > 0
             ? filtro.Año.First()
-            : datos.Max(d => d.Año);
+            : datos.Any(d => d.Año == DateTime.Now.Year)
+                ? DateTime.Now.Year
+                : datos.Max(d => d.Año);
 
         // Últimos 3 meses del año activo con datos
         var mesesDisponibles = datos

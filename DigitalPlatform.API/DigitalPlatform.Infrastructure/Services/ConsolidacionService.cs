@@ -188,7 +188,12 @@ public class ConsolidacionService : IConsolidacionService
 
             // ── Step 5: agregar Planeación → IngresoPlaneado / CostoPlaneado ─
             // Planeación tiene valores en COP → convertir a USD dividiendo por TasaCop del TDC.
-            // Si no existe tasa para el período se omite ese registro y se genera un warning.
+            // Si no existe tasa exacta para el período se usa la última tasa disponible como proxy
+            // (meses futuros de planeación no tienen TDC histórico aún).
+            var ultimaTasaCop = tdcDict.Count > 0
+                ? tdcDict.OrderByDescending(kv => kv.Key.Año).ThenByDescending(kv => kv.Key.Mes).First().Value
+                : 1m;
+
             var planAgg = new Dictionary<ClaveProyecto, PlanBucket>();
             var periodosSinTasa = new HashSet<(int Año, int Mes)>();
 
@@ -197,7 +202,7 @@ public class ConsolidacionService : IConsolidacionService
                 if (!tdcDict.TryGetValue((r.Año, r.Mes), out var tasaCop) || tasaCop <= 0)
                 {
                     periodosSinTasa.Add((r.Año, r.Mes));
-                    continue;
+                    tasaCop = ultimaTasaCop;
                 }
 
                 var clave = new ClaveProyecto(r.Proyecto.Trim(), r.Año, r.Mes);
@@ -214,7 +219,7 @@ public class ConsolidacionService : IConsolidacionService
             }
 
             foreach (var (año, mes) in periodosSinTasa.OrderBy(x => x.Año).ThenBy(x => x.Mes))
-                warnings.Add($"Planeación {año}/{mes:D2}: sin tasa TDC — registros de ese período omitidos (no se puede convertir COP→USD).");
+                warnings.Add($"Planeación {año}/{mes:D2}: sin tasa TDC — se usó última tasa disponible ({ultimaTasaCop:F2}) como proxy.");
 
             // ── Step 6: agregar Horas por (Proyecto, Año, Mes) ───────────────
             var horasAgg = new Dictionary<ClaveProyecto, decimal>();
