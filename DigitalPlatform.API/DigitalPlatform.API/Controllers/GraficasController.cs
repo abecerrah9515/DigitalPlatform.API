@@ -80,12 +80,13 @@ public class GraficasController : ControllerBase
         return Ok(resultado);
     }
 
-    // GET /api/graficas/heatmap-gm
+    // GET /api/graficas/heatmap-gm?pagina=1
     [HttpGet("heatmap-gm")]
     public async Task<ActionResult<ApiResponse<HeatmapGmResponseDto>>> HeatmapGm(
-        [FromQuery] ProyectoFiltros filtro)
+        [FromQuery] ProyectoFiltros filtro,
+        [FromQuery] int pagina = 1)
     {
-        var resultado = await _proyectoService.GraficaHeatmapGmAsync(filtro);
+        var resultado = await _proyectoService.GraficaHeatmapGmAsync(filtro, pagina);
         return Ok(resultado);
     }
 

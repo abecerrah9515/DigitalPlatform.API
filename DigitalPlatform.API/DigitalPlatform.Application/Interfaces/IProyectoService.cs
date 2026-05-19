@@ -28,5 +28,5 @@ public interface IProyectoService
     Task<ApiResponse<TopClientesHorasResponseDto>>     GraficaTopClientesHorasAsync(ProyectoFiltros filtro);
     Task<ApiResponse<TreemapAreaResponseDto>>           GraficaTreemapAreaAsync(ProyectoFiltros filtro);
     Task<ApiResponse<ScatterBurbujaResponseDto>>       GraficaScatterBurbujaAsync(ProyectoFiltros filtro);
-    Task<ApiResponse<HeatmapGmResponseDto>>            GraficaHeatmapGmAsync(ProyectoFiltros filtro);
+    Task<ApiResponse<HeatmapGmResponseDto>>            GraficaHeatmapGmAsync(ProyectoFiltros filtro, int pagina = 1);
 }

@@ -52,6 +52,7 @@ public class TendenciaPuntoDto
     public decimal IngresoPlaneado  { get; set; }
     public decimal Variacion        { get; set; }
     public decimal PctCumplimiento  { get; set; }
+    public bool    SinPlan          { get; set; } // true cuando no hay ingreso planeado para el período
 }
 
 // ── GET /api/graficas/top-clientes-horas ────────────────────────────────────
@@ -65,6 +66,7 @@ public class ClienteHorasDto
     public string  Cliente          { get; set; } = string.Empty;
     public decimal Horas            { get; set; }
     public decimal PctParticipacion { get; set; }
+    public string  AreaMasHoras     { get; set; } = string.Empty; // área con más horas imputadas para ese cliente
 }
 
 // ── GET /api/graficas/treemap-area ───────────────────────────────────────────
@@ -100,7 +102,10 @@ public class BurbujaClienteDto
 // ── GET /api/graficas/heatmap-gm ────────────────────────────────────────────
 public class HeatmapGmResponseDto
 {
-    public List<HeatmapCeldaDto> Celdas { get; set; } = [];
+    public List<HeatmapCeldaDto> Celdas        { get; set; } = [];
+    public int                   TotalClientes  { get; set; }
+    public int                   Pagina         { get; set; }
+    public int                   TamañoPagina   { get; set; } // siempre 10 según HUE-10
 }
 
 public class HeatmapCeldaDto

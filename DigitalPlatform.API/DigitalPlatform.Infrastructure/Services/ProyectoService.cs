@@ -320,30 +320,36 @@ public class ProyectoService : IProyectoService
         var ingPorPeriodoPrev = new Dictionary<(int, int), decimal>();
         var items             = new List<BarrasApiladasItemDto>();
 
+        // Diccionario (año, mes, segmento) → ingreso para calcular variación por segmento
+        var ingPorSegmentoPrev = new Dictionary<(int Año, int Mes, string Seg), decimal>();
+
         foreach (var periodo in porPeriodo)
         {
             var totalPeriodo = periodo.Sum(d => d.IngresoReal * d.Factor);
             var prevAño = periodo.Key.Mes == 1 ? periodo.Key.Año - 1 : periodo.Key.Año;
             var prevMes = periodo.Key.Mes == 1 ? 12 : periodo.Key.Mes - 1;
-            ingPorPeriodoPrev.TryGetValue((prevAño, prevMes), out var ingPrev);
 
             var segmentos = periodo
-                .GroupBy(d => agruparPor == "area" ? d.Area : d.Industria)
+                .GroupBy(d => agruparPor == "area" ? d.Area : d.Vertical)
                 .Select(sg =>
                 {
                     var ing = sg.Sum(d => d.IngresoReal * d.Factor);
+                    ingPorSegmentoPrev.TryGetValue((prevAño, prevMes, sg.Key), out var ingSegPrev);
                     return new BarrasApiladasItemDto
                     {
                         Periodo                  = Label(periodo.Key.Año, periodo.Key.Mes),
                         Segmento                 = sg.Key,
                         Ingreso                  = Math.Round(ing, 2),
                         PorcentajeContribucion   = totalPeriodo != 0 ? Math.Round(ing / totalPeriodo * 100, 2) : 0m,
-                        VariacionPeriodoAnterior = ingPrev != 0 ? Math.Round((ing - ingPrev) / ingPrev * 100, 2) : 0m,
+                        VariacionPeriodoAnterior = ingSegPrev != 0 ? Math.Round((ing - ingSegPrev) / ingSegPrev * 100, 2) : 0m,
                     };
-                });
+                })
+                .ToList();
+
+            foreach (var item in segmentos)
+                ingPorSegmentoPrev[(periodo.Key.Año, periodo.Key.Mes, item.Segmento)] = item.Ingreso;
 
             items.AddRange(segmentos);
-            ingPorPeriodoPrev[(periodo.Key.Año, periodo.Key.Mes)] = totalPeriodo;
         }
 
         return ApiResponse<BarrasApiladasResponseDto>.Ok(new BarrasApiladasResponseDto
@@ -371,15 +377,22 @@ public class ProyectoService : IProyectoService
                 ? DateTime.Now.Year
                 : datos.Max(d => d.Año);
 
-        // Últimos 3 meses del año activo con datos
-        var mesesDisponibles = datos
-            .Where(d => d.Año == añoActivo)
+        // Últimos 3 meses del año activo con datos reales (IngresoReal > 0)
+        // Si no hay meses con real, caer a los últimos 3 meses con cualquier dato
+        var mesesConReal = datos
+            .Where(d => d.Año == añoActivo && d.IngresoReal > 0)
             .Select(d => d.Mes)
             .Distinct()
             .OrderByDescending(m => m)
             .Take(3)
             .OrderBy(m => m)
             .ToList();
+
+        var mesesDisponibles = mesesConReal.Count > 0
+            ? mesesConReal
+            : datos.Where(d => d.Año == añoActivo)
+                   .Select(d => d.Mes).Distinct()
+                   .OrderByDescending(m => m).Take(3).OrderBy(m => m).ToList();
 
         var datosFiltrados = datos.Where(d => d.Año == añoActivo && mesesDisponibles.Contains(d.Mes));
 
@@ -405,7 +418,7 @@ public class ProyectoService : IProyectoService
                 Plan         = p.IngresoPlaneado,
                 Real         = p.IngresoReal,
                 VariacionPct = Math.Round(variacion, 2),
-                Estado       = variacion >= 0 ? "Verde" : variacion >= -10 ? "Amarillo" : "Rojo",
+                Estado       = variacion >= 0 ? "Verde" : "Rojo",
             };
         }).ToList();
 
@@ -428,19 +441,20 @@ public class ProyectoService : IProyectoService
             .OrderBy(g => g.Key.Año).ThenBy(g => g.Key.Mes)
             .Select(g =>
             {
-                var real     = g.Sum(d => d.IngresoReal     * d.Factor);
-                var plan     = g.Sum(d => d.IngresoPlaneado * d.Factor);
-                var variacion   = plan != 0 ? (real - plan) / plan * 100m : 0m;
-                var cumpl       = plan != 0 ? real / plan * 100m : 0m;
+                var real  = g.Sum(d => d.IngresoReal     * d.Factor);
+                var plan  = g.Sum(d => d.IngresoPlaneado * d.Factor);
+                var sinPlan = plan == 0;
                 return new TendenciaPuntoDto
                 {
                     Periodo         = Label(g.Key.Año, g.Key.Mes),
-                    IngresoReal     = Math.Round(real,     2),
-                    IngresoPlaneado = Math.Round(plan,     2),
-                    Variacion       = Math.Round(variacion, 2),
-                    PctCumplimiento = Math.Round(cumpl,    2),
+                    IngresoReal     = Math.Round(real, 2),
+                    IngresoPlaneado = Math.Round(plan, 2),
+                    SinPlan         = sinPlan,
+                    Variacion       = sinPlan ? 0m : Math.Round((real - plan) / plan * 100m, 2),
+                    PctCumplimiento = sinPlan ? 0m : Math.Round(real / plan * 100m, 2),
                 };
             })
+            .Where(p => p.IngresoReal != 0 || p.IngresoPlaneado != 0) // omitir períodos sin ningún dato
             .ToList();
 
         return ApiResponse<TendenciaResponseDto>.Ok(new TendenciaResponseDto { Puntos = puntos });
@@ -457,7 +471,16 @@ public class ProyectoService : IProyectoService
 
         var clientes = datos
             .GroupBy(d => d.Cliente)
-            .Select(g => new { Cliente = g.Key, Horas = g.Sum(d => d.Horas) })
+            .Select(g =>
+            {
+                var horas = g.Sum(d => d.Horas);
+                var areaMasHoras = g
+                    .GroupBy(d => d.Area)
+                    .OrderByDescending(ag => ag.Sum(d => d.Horas))
+                    .Select(ag => ag.Key)
+                    .FirstOrDefault() ?? string.Empty;
+                return new { Cliente = g.Key, Horas = horas, AreaMasHoras = areaMasHoras };
+            })
             .OrderByDescending(x => x.Horas)
             .Take(10)
             .Select(x => new ClienteHorasDto
@@ -465,6 +488,7 @@ public class ProyectoService : IProyectoService
                 Cliente          = x.Cliente,
                 Horas            = Math.Round(x.Horas, 2),
                 PctParticipacion = totalHoras != 0 ? Math.Round(x.Horas / totalHoras * 100, 2) : 0m,
+                AreaMasHoras     = x.AreaMasHoras,
             })
             .ToList();
 
@@ -538,22 +562,39 @@ public class ProyectoService : IProyectoService
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    // Gráfica 7 — Heatmap GM% por cliente × mes (máx. 5 clientes)
+    // Gráfica 7 — Heatmap GM% por cliente × mes (paginado: 10 clientes/página)
+    // Clientes ordenados de menor a mayor GM% promedio (HUE-10)
     // ════════════════════════════════════════════════════════════════════════
-    public async Task<ApiResponse<HeatmapGmResponseDto>> GraficaHeatmapGmAsync(ProyectoFiltros filtro)
+    public async Task<ApiResponse<HeatmapGmResponseDto>> GraficaHeatmapGmAsync(
+        ProyectoFiltros filtro, int pagina = 1)
     {
+        const int tamañoPagina = 10;
         var (datos, _) = await CargarDatosAsync(filtro);
 
-        // Top 5 clientes por ingreso real
-        var top5 = datos
+        // Calcular GM% promedio por cliente para ordenar de menor a mayor
+        var clientesOrdenados = datos
             .GroupBy(d => d.Cliente)
-            .OrderByDescending(g => g.Sum(d => d.IngresoReal * d.Factor))
-            .Take(5)
-            .Select(g => g.Key)
+            .Select(g =>
+            {
+                var ing   = g.Sum(d => d.IngresoReal * d.Factor);
+                var costo = g.Sum(d => d.CostoReal   * d.Factor);
+                var gmProm = ing != 0 ? (ing - costo) / ing * 100m : 0m;
+                return new { Cliente = g.Key, GmPromedio = gmProm };
+            })
+            .OrderBy(x => x.GmPromedio) // menor a mayor GM% promedio
+            .ToList();
+
+        var totalClientes = clientesOrdenados.Count;
+        var paginaActual  = Math.Max(1, pagina);
+
+        var clientesPagina = clientesOrdenados
+            .Skip((paginaActual - 1) * tamañoPagina)
+            .Take(tamañoPagina)
+            .Select(x => x.Cliente)
             .ToHashSet();
 
         var celdas = datos
-            .Where(d => top5.Contains(d.Cliente))
+            .Where(d => clientesPagina.Contains(d.Cliente))
             .GroupBy(d => new { d.Cliente, d.Año, d.Mes })
             .Select(g =>
             {
@@ -569,10 +610,18 @@ public class ProyectoService : IProyectoService
                     Costo   = Math.Round(costo, 2),
                 };
             })
-            .OrderBy(c => c.Cliente).ThenBy(c => c.Periodo)
+            // Mantener el orden GM% promedio dentro de la página, luego por período
+            .OrderBy(c => clientesOrdenados.FindIndex(x => x.Cliente == c.Cliente))
+            .ThenBy(c => c.Periodo)
             .ToList();
 
-        return ApiResponse<HeatmapGmResponseDto>.Ok(new HeatmapGmResponseDto { Celdas = celdas });
+        return ApiResponse<HeatmapGmResponseDto>.Ok(new HeatmapGmResponseDto
+        {
+            Celdas       = celdas,
+            TotalClientes = totalClientes,
+            Pagina        = paginaActual,
+            TamañoPagina  = tamañoPagina,
+        });
     }
 
     // ════════════════════════════════════════════════════════════════════════

@@ -15,6 +15,13 @@ namespace DigitalPlatform.Infrastructure.Services;
 
 public class ConsolidacionService : IConsolidacionService
 {
+    // Limpia etiquetas HTML que pueden venir del Excel (ej: "Cliente S.A.<br> - 001")
+    private static readonly System.Text.RegularExpressions.Regex _htmlTagRegex =
+        new("<[^>]*>", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    private static string LimpiarHtml(string? valor) =>
+        string.IsNullOrWhiteSpace(valor) ? string.Empty : _htmlTagRegex.Replace(valor, string.Empty).Trim();
+
     private readonly ApplicationDbContext _db;
     private readonly IGR55Parser _gr55Parser;
     private readonly IHorasParser _horasParser;
@@ -291,8 +298,8 @@ public class ConsolidacionService : IConsolidacionService
                         Industria        = industria,
                         Vertical         = vertical ?? string.Empty,
                         Area             = area ?? string.Empty,
-                        Cliente          = p?.Cliente    ?? string.Empty,
-                        Responsable      = p?.Responsable ?? string.Empty,
+                        Cliente          = LimpiarHtml(p?.Cliente),
+                        Responsable      = LimpiarHtml(p?.Responsable),
                     });
 
                     exitosos++;
