@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using DigitalPlatform.Application.Common;
 using DigitalPlatform.Application.DTOs.Consolidacion;
@@ -15,6 +16,11 @@ namespace DigitalPlatform.Infrastructure.Services;
 
 public class ConsolidacionService : IConsolidacionService
 {
+    // ── Caché en memoria para progreso en tiempo real ────────────────────────
+    // Clave: consolidacionId — vive mientras el proceso está corriendo.
+    // ObtenerEstadoAsync lo consulta primero; al finalizar se serializa a FuentesJson en BD.
+    private static readonly ConcurrentDictionary<int, List<FuenteEstadoDto>> _progressCache = new();
+
     // Limpia etiquetas HTML que pueden venir del Excel (ej: "Cliente S.A.<br> - 001")
     private static readonly System.Text.RegularExpressions.Regex _htmlTagRegex =
         new("<[^>]*>", System.Text.RegularExpressions.RegexOptions.Compiled);
@@ -71,7 +77,7 @@ public class ConsolidacionService : IConsolidacionService
         string  Responsable);
 
     // ════════════════════════════════════════════════════════════════════════
-    // CrearLogAsync — crea el log con estado Procesando y retorna su Id
+    // CrearLogAsync — crea el log con estado Procesando, inicializa caché y retorna Id
     // ════════════════════════════════════════════════════════════════════════
     public async Task<int> CrearLogAsync(string iniciadoPor)
     {
@@ -84,6 +90,17 @@ public class ConsolidacionService : IConsolidacionService
         };
         _db.ConsolidacionLogs.Add(log);
         await _db.SaveChangesAsync();
+
+        // Inicializar caché con los 5 archivos en estado Pendiente desde el primer momento
+        var fuentesIniciales = new List<FuenteEstadoDto>
+        {
+            new() { Archivo = "GR55",               Estado = "Pendiente", RegistrosProcesados = 0, TotalRegistros = 0 },
+            new() { Archivo = "Horas",               Estado = "Pendiente", RegistrosProcesados = 0, TotalRegistros = 0 },
+            new() { Archivo = "Planeacion",          Estado = "Pendiente", RegistrosProcesados = 0, TotalRegistros = 0 },
+            new() { Archivo = "TipoCambio",          Estado = "Pendiente", RegistrosProcesados = 0, TotalRegistros = 0 },
+            new() { Archivo = "MaestroReferencias",  Estado = "Pendiente", RegistrosProcesados = 0, TotalRegistros = 0 },
+        };
+        _progressCache[log.Id] = fuentesIniciales;
 
         _logger.LogInformation("ConsolidacionService: log {Id} creado con estado Procesando.", log.Id);
         return log.Id;
@@ -101,52 +118,67 @@ public class ConsolidacionService : IConsolidacionService
             return;
         }
 
-        var warnings      = new List<string>();
-        var fuentesEstado = new List<FuenteEstadoDto>();
+        // Asegurar que la caché existe aunque CrearLogAsync haya sido llamado desde otro scope
+        if (!_progressCache.ContainsKey(consolidacionId))
+        {
+            _progressCache[consolidacionId] = new List<FuenteEstadoDto>
+            {
+                new() { Archivo = "GR55",              Estado = "Pendiente" },
+                new() { Archivo = "Horas",             Estado = "Pendiente" },
+                new() { Archivo = "Planeacion",        Estado = "Pendiente" },
+                new() { Archivo = "TipoCambio",        Estado = "Pendiente" },
+                new() { Archivo = "MaestroReferencias",Estado = "Pendiente" },
+            };
+        }
+
+        var warnings = new List<string>();
 
         try
         {
             var rutaBase = _config["ConsolidacionArchivos:RutaBase"] ?? string.Empty;
 
-            // ── Step 2: parsear los 5 archivos Excel — actualizar progreso tras cada uno ──
+            // ── Parsear los 5 archivos — actualizar caché antes/durante/después ──
             var gr55Registros = await ParsearArchivo(
+                consolidacionId,
                 Path.Combine(rutaBase, _config["ConsolidacionArchivos:GR55"]               ?? "GR55.xlsx"),
-                _gr55Parser.ParsearAsync, "GR55", fuentesEstado, warnings);
+                _gr55Parser.ParsearAsync, "GR55", warnings);
             log.RegistrosExitosos++; await _db.SaveChangesAsync();
 
             var horasRegistros = await ParsearArchivo(
+                consolidacionId,
                 Path.Combine(rutaBase, _config["ConsolidacionArchivos:Horas"]              ?? "Horas.xlsx"),
-                _horasParser.ParsearAsync, "Horas", fuentesEstado, warnings);
+                _horasParser.ParsearAsync, "Horas", warnings);
             log.RegistrosExitosos++; await _db.SaveChangesAsync();
 
             var planeacionRegistros = await ParsearArchivo(
+                consolidacionId,
                 Path.Combine(rutaBase, _config["ConsolidacionArchivos:Planeacion"]         ?? "Planeacion.xlsx"),
-                _planeacionParser.ParsearAsync, "Planeacion", fuentesEstado, warnings);
+                _planeacionParser.ParsearAsync, "Planeacion", warnings);
             log.RegistrosExitosos++; await _db.SaveChangesAsync();
 
             var tdcRegistros = await ParsearArchivo(
+                consolidacionId,
                 Path.Combine(rutaBase, _config["ConsolidacionArchivos:TipoCambio"]         ?? "TDC.xlsx"),
-                _tipoCambioParser.ParsearAsync, "TipoCambio", fuentesEstado, warnings);
+                _tipoCambioParser.ParsearAsync, "TipoCambio", warnings);
             log.RegistrosExitosos++; await _db.SaveChangesAsync();
 
             var maestro = await ParsearArchivo(
+                consolidacionId,
                 Path.Combine(rutaBase, _config["ConsolidacionArchivos:MaestroReferencias"] ?? "MaestroReferencias.xlsx"),
-                _maestroParser.ParsearAsync, "MaestroReferencias", fuentesEstado, warnings)
+                _maestroParser.ParsearAsync, "MaestroReferencias", warnings)
                 ?? new MaestroReferenciasDto();
             log.RegistrosExitosos++; await _db.SaveChangesAsync();
 
-            // ── Step 2b: persistir tasas COP en TiposCambio ─────────────────
+            // ── Persistir tasas COP en TiposCambio ─────────────────────────
             await PersistirTiposCambioAsync(tdcRegistros ?? []);
 
-            // Lookup local de tasas para normalizar Planeación COP → USD en Step 5
+            // Lookup local de tasas para normalizar Planeación COP → USD
             var tdcDict = (tdcRegistros ?? [])
                 .Where(r => r.TasaCop > 0)
                 .GroupBy(r => (r.Año, r.Mes))
                 .ToDictionary(g => g.Key, g => g.First().TasaCop);
 
-            // ── Step 3: construir lookups desde el Maestro de referencias ────
-            // TryAdd en todos los dicts para tolerar duplicados en el maestro (toma el primero)
-            // Clave = LineItemId (número SAP como "51120001") — coincide con GR55.NumeroCuenta
+            // ── Lookups desde el Maestro de referencias ──────────────────────
             var cuentaClasif = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (var a in maestro.AccountsGroups.Where(a => !string.IsNullOrWhiteSpace(a.LineItemId)))
                 cuentaClasif.TryAdd(a.LineItemId.Trim(), a.Clasificacion.Trim());
@@ -167,14 +199,12 @@ public class ConsolidacionService : IConsolidacionService
             foreach (var a in maestro.Areas.Where(a => !string.IsNullOrWhiteSpace(a.CeBe)))
                 areaDict.TryAdd(a.CeBe.Trim(), a.Area.Trim());
 
-            // ── Step 4: agregar GR55 → IngresoReal / CostoReal ───────────────
+            // ── Agregar GR55 → IngresoReal / CostoReal ───────────────────────
             var gr55Agg = new Dictionary<ClaveProyecto, Gr55Bucket>();
 
             foreach (var r in (gr55Registros ?? []).Where(r => !string.IsNullOrWhiteSpace(r.ElementoPEP)))
             {
                 var clave = new ClaveProyecto(r.ElementoPEP.Trim(), r.Ejercicio, r.PeriodoContable);
-
-                // Clasificar cuenta como Ingreso o Costo
                 var valor = r.ValorMonedaLocalCeBe;
                 cuentaClasif.TryGetValue(r.NumeroCuenta.Trim(), out var clasif);
 
@@ -183,9 +213,6 @@ public class ConsolidacionService : IConsolidacionService
 
                 var esIngreso = clasif?.Equals("Ingreso", StringComparison.OrdinalIgnoreCase) == true;
 
-                // valor = SAP_value × -1: ingresos vienen negativos en SAP → quedan positivos;
-                // costos vienen positivos en SAP → quedan negativos. Se niegan al acumular para
-                // que CostoReal sea positivo y los ajustes/notas de crédito reduzcan correctamente.
                 gr55Agg[clave] = new Gr55Bucket(
                     IngresoReal     : prev.IngresoReal + (esIngreso ?  valor : 0m),
                     CostoReal       : prev.CostoReal   + (esIngreso ? 0m : -valor),
@@ -193,10 +220,7 @@ public class ConsolidacionService : IConsolidacionService
                     CentroBeneficio : r.CentroBeneficio);
             }
 
-            // ── Step 5: agregar Planeación → IngresoPlaneado / CostoPlaneado ─
-            // Planeación tiene valores en COP → convertir a USD dividiendo por TasaCop del TDC.
-            // Si no existe tasa exacta para el período se usa la última tasa disponible como proxy
-            // (meses futuros de planeación no tienen TDC histórico aún).
+            // ── Agregar Planeación → IngresoPlaneado / CostoPlaneado (COP → USD) ─
             var ultimaTasaCop = tdcDict.Count > 0
                 ? tdcDict.OrderByDescending(kv => kv.Key.Año).ThenByDescending(kv => kv.Key.Mes).First().Value
                 : 1m;
@@ -228,7 +252,7 @@ public class ConsolidacionService : IConsolidacionService
             foreach (var (año, mes) in periodosSinTasa.OrderBy(x => x.Año).ThenBy(x => x.Mes))
                 warnings.Add($"Planeación {año}/{mes:D2}: sin tasa TDC — se usó última tasa disponible ({ultimaTasaCop:F2}) como proxy.");
 
-            // ── Step 6: agregar Horas por (Proyecto, Año, Mes) ───────────────
+            // ── Agregar Horas por (Proyecto, Año, Mes) ───────────────────────
             var horasAgg = new Dictionary<ClaveProyecto, decimal>();
 
             foreach (var r in (horasRegistros ?? []).Where(r => !string.IsNullOrWhiteSpace(r.Proyecto)))
@@ -237,13 +261,13 @@ public class ConsolidacionService : IConsolidacionService
                 horasAgg[clave] = horasAgg.GetValueOrDefault(clave) + r.Horas;
             }
 
-            // ── Step 7: unión de todas las claves únicas ─────────────────────
+            // ── Unión de todas las claves únicas ─────────────────────────────
             var todasLasClaves = gr55Agg.Keys
                 .Union(planAgg.Keys)
                 .Union(horasAgg.Keys)
                 .ToHashSet();
 
-            // ── Step 8: crear entidades Proyecto ─────────────────────────────
+            // ── Crear entidades Proyecto ──────────────────────────────────────
             int exitosos = 0, fallidos = 0;
             var proyectos = new List<Proyecto>(todasLasClaves.Count);
 
@@ -255,13 +279,11 @@ public class ConsolidacionService : IConsolidacionService
                     planAgg.TryGetValue(clave, out var p);
                     horasAgg.TryGetValue(clave, out var horas);
 
-                    // Resolver Sociedad
                     var rawSoc = g?.SocReceptora ?? string.Empty;
                     sociedadDict.TryGetValue(rawSoc, out var socRef);
                     var sociedad = socRef?.RazonSocial ?? rawSoc;
                     var pais     = socRef?.Pais ?? string.Empty;
 
-                    // Resolver CeBe: GR55 tiene prioridad; fallback a Planeación
                     var rawCebe = !string.IsNullOrWhiteSpace(g?.CentroBeneficio)
                         ? g.CentroBeneficio
                         : p?.Cebe ?? string.Empty;
@@ -270,13 +292,9 @@ public class ConsolidacionService : IConsolidacionService
                     if (!string.IsNullOrWhiteSpace(rawCebe) && cebeDict.TryGetValue(rawCebe, out var cebeRef))
                         cebeNombre = cebeRef.Nombre;
 
-                    // Industria = CodIndustria de la fuente (e.g. "Z01")
                     var industria = p?.Industria ?? string.Empty;
+                    var vertical  = industriaDict.TryGetValue(industria, out var vNombre) ? vNombre : industria;
 
-                    // Vertical viene del código de industria → Maestro.Industrias (confirmado por analista)
-                    var vertical = industriaDict.TryGetValue(industria, out var vNombre) ? vNombre : industria;
-
-                    // Area viene del CeBe → Maestro.Areas (confirmado por analista)
                     var area = string.Empty;
                     if (!string.IsNullOrWhiteSpace(rawCebe))
                         areaDict.TryGetValue(rawCebe, out area!);
@@ -315,7 +333,7 @@ public class ConsolidacionService : IConsolidacionService
 
             _db.Proyectos.AddRange(proyectos);
 
-            // ── Determinar estado final y sobrescribir contadores con filas reales ──
+            // ── Estado final y contadores reales ──────────────────────────────
             var estado = exitosos == 0
                 ? EstadoConsolidacion.Fallido
                 : fallidos > 0 || warnings.Count > 0
@@ -327,9 +345,12 @@ public class ConsolidacionService : IConsolidacionService
             log.TotalRegistros    = exitosos + fallidos;
             log.RegistrosExitosos = exitosos;
             log.RegistrosFallidos = fallidos;
-            log.Errores           = warnings.Count > 0
-                ? JsonSerializer.Serialize(warnings)
-                : null;
+            log.Errores           = warnings.Count > 0 ? JsonSerializer.Serialize(warnings) : null;
+
+            // Persistir fuentes en BD y limpiar caché
+            if (_progressCache.TryGetValue(consolidacionId, out var fuentesFinales))
+                log.FuentesJson = JsonSerializer.Serialize(fuentesFinales);
+            _progressCache.TryRemove(consolidacionId, out _);
 
             await _db.SaveChangesAsync();
 
@@ -341,20 +362,25 @@ public class ConsolidacionService : IConsolidacionService
         {
             _logger.LogError(ex, "ConsolidacionService: error fatal en consolidación {Id}", consolidacionId);
 
-            // Recargar log si fue desasociado por el error
             var logFatal = await _db.ConsolidacionLogs.FindAsync(consolidacionId);
             if (logFatal is not null)
             {
                 logFatal.FechaFin = DateTime.UtcNow;
                 logFatal.Estado   = EstadoConsolidacion.Fallido;
                 logFatal.Errores  = JsonSerializer.Serialize(new[] { ex.Message });
+
+                // Guardar fuentes con error y limpiar caché
+                if (_progressCache.TryGetValue(consolidacionId, out var fuentesError))
+                    logFatal.FuentesJson = JsonSerializer.Serialize(fuentesError);
+                _progressCache.TryRemove(consolidacionId, out _);
+
                 await _db.SaveChangesAsync();
             }
         }
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    // ObtenerEstadoAsync
+    // ObtenerEstadoAsync — lee caché primero (en vivo), luego BD (completado)
     // ════════════════════════════════════════════════════════════════════════
     public async Task<ApiResponse<ConsolidacionEstadoDto>> ObtenerEstadoAsync(int consolidacionId)
     {
@@ -373,6 +399,27 @@ public class ConsolidacionService : IConsolidacionService
             ? (int)Math.Round(log.RegistrosExitosos * 100.0 / log.TotalRegistros)
             : log.FechaFin.HasValue ? 100 : 0;
 
+        // ── Fuentes: caché en vivo (Procesando) → BD serializada (Completado) ─
+        List<FuenteEstadoDto> fuentes = [];
+
+        if (_progressCache.TryGetValue(consolidacionId, out var fuentesVivas))
+        {
+            // Copia thread-safe para serialización
+            fuentes = fuentesVivas.Select(f => new FuenteEstadoDto
+            {
+                Archivo             = f.Archivo,
+                Estado              = f.Estado,
+                RegistrosProcesados = f.RegistrosProcesados,
+                TotalRegistros      = f.TotalRegistros,
+                Error               = f.Error,
+            }).ToList();
+        }
+        else if (!string.IsNullOrWhiteSpace(log.FuentesJson))
+        {
+            try   { fuentes = JsonSerializer.Deserialize<List<FuenteEstadoDto>>(log.FuentesJson) ?? []; }
+            catch { /* ignorar deserialización fallida */ }
+        }
+
         return ApiResponse<ConsolidacionEstadoDto>.Ok(new ConsolidacionEstadoDto
         {
             ConsolidacionId   = log.Id,
@@ -384,7 +431,7 @@ public class ConsolidacionService : IConsolidacionService
             FechaInicio       = log.FechaInicio,
             FechaFin          = log.FechaFin,
             Errores           = errores,
-            Fuentes           = [],  // no se persisten fuentes individuales por consolidación
+            Fuentes           = fuentes,
         });
     }
 
@@ -426,7 +473,7 @@ public class ConsolidacionService : IConsolidacionService
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    // Helper: persistir TiposCambio — COP (del TDC) + USD = 1 para cada período
+    // Helper: persistir TiposCambio
     // ════════════════════════════════════════════════════════════════════════
     private async Task PersistirTiposCambioAsync(List<RegistroTipoCambioDto> registros)
     {
@@ -438,14 +485,12 @@ public class ConsolidacionService : IConsolidacionService
 
         foreach (var r in registros.Where(r => r.TasaCop > 0))
         {
-            // Tasa COP (del TDC)
             if (existentes.TryGetValue((r.Año, r.Mes, "COP"), out var cop))
                 cop.Tasa = r.TasaCop;
             else
                 _db.TiposCambio.Add(new Domain.Entities.TipoCambio
                     { Año = r.Año, Mes = r.Mes, Moneda = "COP", Tasa = r.TasaCop });
 
-            // Tasa USD = 1 (valores ya están en USD)
             if (!existentes.ContainsKey((r.Año, r.Mes, "USD")))
                 _db.TiposCambio.Add(new Domain.Entities.TipoCambio
                     { Año = r.Año, Mes = r.Mes, Moneda = "USD", Tasa = 1m });
@@ -456,43 +501,70 @@ public class ConsolidacionService : IConsolidacionService
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    // Helper: parsear un archivo Excel con manejo defensivo de errores
+    // Helper: parsear un archivo con progreso en tiempo real en caché
     // ════════════════════════════════════════════════════════════════════════
     private async Task<T?> ParsearArchivo<T>(
+        int consolidacionId,
         string ruta,
-        Func<Stream, Task<T>> parser,
+        Func<Stream, Action<int>?, Task<T>> parser,
         string nombre,
-        List<FuenteEstadoDto> fuentesEstado,
         List<string> warnings) where T : class
     {
-        var fuente = new FuenteEstadoDto { Archivo = nombre, Estado = "Pendiente" };
-        fuentesEstado.Add(fuente);
+        // Marcar como Procesando en caché (visible de inmediato al polling)
+        ActualizarFuenteEnCache(consolidacionId, nombre, "Procesando", 0, 0, null);
 
         if (!File.Exists(ruta))
         {
-            fuente.Estado = "Fallido";
-            fuente.Error  = $"Archivo no encontrado: {ruta}";
-            warnings.Add($"{nombre}: {fuente.Error}");
-            _logger.LogWarning("ConsolidacionService: {Msg}", fuente.Error);
+            var error = $"Archivo no encontrado: {ruta}";
+            ActualizarFuenteEnCache(consolidacionId, nombre, "Fallido", 0, 0, error);
+            warnings.Add($"{nombre}: {error}");
+            _logger.LogWarning("ConsolidacionService: {Msg}", error);
             return null;
         }
 
         try
         {
-            await using var stream = File.OpenRead(ruta);
-            var result = await parser(stream);
+            // Callback llamado cada 100 filas por el parser → actualiza caché en tiempo real
+            Action<int> onProgress = count =>
+                ActualizarFuenteEnCache(consolidacionId, nombre, "Procesando", count, 0, null);
 
-            fuente.Estado              = "Exitoso";
-            fuente.RegistrosProcesados = result is System.Collections.ICollection col ? col.Count : 0;
+            await using var stream = File.OpenRead(ruta);
+            var result = await parser(stream, onProgress);
+
+            var total = result is System.Collections.ICollection col ? col.Count : 0;
+            ActualizarFuenteEnCache(consolidacionId, nombre, "Exitoso", total, total, null);
             return result;
         }
         catch (Exception ex)
         {
-            fuente.Estado = "Fallido";
-            fuente.Error  = ex.Message;
+            ActualizarFuenteEnCache(consolidacionId, nombre, "Fallido", 0, 0, ex.Message);
             warnings.Add($"{nombre}: {ex.Message}");
             _logger.LogWarning(ex, "ConsolidacionService: error parseando {Nombre}", nombre);
             return null;
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // Helper: actualizar una fuente específica en el caché (thread-safe)
+    // ════════════════════════════════════════════════════════════════════════
+    private static void ActualizarFuenteEnCache(
+        int consolidacionId,
+        string archivo,
+        string estado,
+        int registrosProcesados,
+        int totalRegistros,
+        string? error)
+    {
+        if (!_progressCache.TryGetValue(consolidacionId, out var fuentes)) return;
+
+        lock (fuentes)
+        {
+            var fuente = fuentes.FirstOrDefault(f => f.Archivo == archivo);
+            if (fuente is null) return;
+            fuente.Estado              = estado;
+            fuente.RegistrosProcesados = registrosProcesados;
+            fuente.TotalRegistros      = totalRegistros;
+            fuente.Error               = error;
         }
     }
 }

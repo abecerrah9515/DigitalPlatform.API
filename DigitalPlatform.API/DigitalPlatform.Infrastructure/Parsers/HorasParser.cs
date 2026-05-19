@@ -23,7 +23,7 @@ public class HorasParser : IHorasParser
 
     public HorasParser(ILogger<HorasParser> logger) => _logger = logger;
 
-    public Task<List<RegistroHorasDto>> ParsearAsync(Stream archivo)
+    public Task<List<RegistroHorasDto>> ParsearAsync(Stream archivo, Action<int>? onProgress = null)
     {
         var resultado  = new List<RegistroHorasDto>();
         var sheetNames = archivo.GetSheetNames();
@@ -73,6 +73,7 @@ public class HorasParser : IHorasParser
                     Horas        = ExcelParserHelper.GetDecimal(row, "horas"),
                     Brm          = ExcelParserHelper.GetString(row, "brm"),
                 });
+                if (resultado.Count % 100 == 0) onProgress?.Invoke(resultado.Count);
             }
             catch (Exception ex)
             {

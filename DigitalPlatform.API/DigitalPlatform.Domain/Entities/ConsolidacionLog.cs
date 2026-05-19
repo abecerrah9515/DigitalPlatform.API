@@ -12,6 +12,8 @@ public class ConsolidacionLog
     public int RegistrosExitosos { get; set; }
     public int RegistrosFallidos { get; set; }
     public string? Errores { get; set; }
+    /// <summary>JSON serializado de List&lt;FuenteEstadoDto&gt; — se guarda al completar la consolidación.</summary>
+    public string? FuentesJson { get; set; }
     public string IniciadoPor { get; set; } = string.Empty;
 
     public ICollection<Proyecto> Proyectos { get; set; } = [];

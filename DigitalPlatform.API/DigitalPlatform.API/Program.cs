@@ -35,7 +35,7 @@ builder.WebHost.ConfigureKestrel(o =>
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("FrontendDev", policy =>
-        policy.WithOrigins("http://localhost:4200")
+        policy.AllowAnyOrigin()
               .AllowAnyHeader()
               .AllowAnyMethod());
 });
@@ -55,8 +55,8 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI(c => c.SwaggerEndpoint("/swagger/v1/swagger.json", "Plataforma Digital API v1"));
 }
 
-app.UseHttpsRedirection();
 app.UseCors("FrontendDev");
+// app.UseHttpsRedirection(); // desactivado — el túnel de desarrollo maneja TLS
 app.UseAuthorization();
 app.MapControllers();
 

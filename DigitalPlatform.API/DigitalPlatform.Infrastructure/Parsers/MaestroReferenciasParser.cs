@@ -11,18 +11,19 @@ public class MaestroReferenciasParser : IMaestroReferenciasParser
 
     public MaestroReferenciasParser(ILogger<MaestroReferenciasParser> logger) => _logger = logger;
 
-    public Task<MaestroReferenciasDto> ParsearAsync(Stream archivo)
+    public Task<MaestroReferenciasDto> ParsearAsync(Stream archivo, Action<int>? onProgress = null)
     {
         var dto        = new MaestroReferenciasDto();
         var sheetNames = archivo.GetSheetNames();
+        var totalFilas = 0;
 
-        dto.Industrias     = ParseSheet(archivo, sheetNames, "Industria",      ParseIndustria);
-        dto.CeBes          = ParseSheet(archivo, sheetNames, "CeBe",           ParseCeBe);
-        dto.Sociedades     = ParseSheet(archivo, sheetNames, "Sociedad",        ParseSociedad);
-        dto.Paises         = ParseSheet(archivo, sheetNames, "Pais",            ParsePais);
-        dto.AccountsGroups = ParseSheet(archivo, sheetNames, "Accounts_Group",  ParseAccountsGroup);
-        dto.Verticales     = ParseSheet(archivo, sheetNames, "Verticales",      ParseVertical);
-        dto.Areas          = ParseSheet(archivo, sheetNames, "Area",            ParseArea);
+        dto.Industrias     = ParseSheet(archivo, sheetNames, "Industria",      ParseIndustria,     ref totalFilas, onProgress);
+        dto.CeBes          = ParseSheet(archivo, sheetNames, "CeBe",           ParseCeBe,          ref totalFilas, onProgress);
+        dto.Sociedades     = ParseSheet(archivo, sheetNames, "Sociedad",        ParseSociedad,      ref totalFilas, onProgress);
+        dto.Paises         = ParseSheet(archivo, sheetNames, "Pais",            ParsePais,          ref totalFilas, onProgress);
+        dto.AccountsGroups = ParseSheet(archivo, sheetNames, "Accounts_Group",  ParseAccountsGroup, ref totalFilas, onProgress);
+        dto.Verticales     = ParseSheet(archivo, sheetNames, "Verticales",      ParseVertical,      ref totalFilas, onProgress);
+        dto.Areas          = ParseSheet(archivo, sheetNames, "Area",            ParseArea,          ref totalFilas, onProgress);
 
         return Task.FromResult(dto);
     }
@@ -31,7 +32,9 @@ public class MaestroReferenciasParser : IMaestroReferenciasParser
         Stream archivo,
         IReadOnlyList<string> sheetNames,
         string nombreParcial,
-        Func<Dictionary<string, object?>, T?> parseRow)
+        Func<Dictionary<string, object?>, T?> parseRow,
+        ref int totalFilas,
+        Action<int>? onProgress)
     {
         var hoja = sheetNames.FirstOrDefault(s =>
             s.Contains(nombreParcial, StringComparison.OrdinalIgnoreCase));
@@ -55,6 +58,8 @@ public class MaestroReferenciasParser : IMaestroReferenciasParser
             {
                 _logger.LogWarning(ex, "Maestro hoja '{Sheet}': error en fila ignorado.", hoja);
             }
+            totalFilas++;
+            if (totalFilas % 100 == 0) onProgress?.Invoke(totalFilas);
         }
         return resultado;
     }

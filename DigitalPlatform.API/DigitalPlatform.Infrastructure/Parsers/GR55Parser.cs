@@ -25,7 +25,7 @@ public class GR55Parser : IGR55Parser
 
     public GR55Parser(ILogger<GR55Parser> logger) => _logger = logger;
 
-    public Task<List<RegistroGR55Dto>> ParsearAsync(Stream archivo)
+    public Task<List<RegistroGR55Dto>> ParsearAsync(Stream archivo, Action<int>? onProgress = null)
     {
         var resultado = new List<RegistroGR55Dto>();
         var sheetNames = archivo.GetSheetNames();
@@ -83,6 +83,7 @@ public class GR55Parser : IGR55Parser
                         ValorMonedaLocalCeBe = ExcelParserHelper.GetDecimal(row, "en moneda local centro de beneficio") * -1,
                         ClaveMonedaLocalCeBe = ExcelParserHelper.GetString(row, "clave moneda ml cebe"),
                     });
+                    if (resultado.Count % 100 == 0) onProgress?.Invoke(resultado.Count);
                 }
                 catch (Exception ex)
                 {

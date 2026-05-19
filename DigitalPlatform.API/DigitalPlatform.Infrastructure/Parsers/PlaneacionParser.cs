@@ -33,7 +33,7 @@ public class PlaneacionParser : IPlaneacionParser
 
     public PlaneacionParser(ILogger<PlaneacionParser> logger) => _logger = logger;
 
-    public Task<List<RegistroPlaneacionDto>> ParsearAsync(Stream archivo)
+    public Task<List<RegistroPlaneacionDto>> ParsearAsync(Stream archivo, Action<int>? onProgress = null)
     {
         var resultado  = new List<RegistroPlaneacionDto>();
         var sheetNames = archivo.GetSheetNames();
@@ -85,6 +85,7 @@ public class PlaneacionParser : IPlaneacionParser
                     Brm                = ExcelParserHelper.GetString(row, "brm"),
                     ResponsableWbs     = ExcelParserHelper.GetString(row, "responsable_wbs"),
                 });
+                if (resultado.Count % 100 == 0) onProgress?.Invoke(resultado.Count);
             }
             catch (Exception ex)
             {

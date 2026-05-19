@@ -12,7 +12,7 @@ public class TipoCambioParser : ITipoCambioParser
 
     public TipoCambioParser(ILogger<TipoCambioParser> logger) => _logger = logger;
 
-    public Task<List<RegistroTipoCambioDto>> ParsearAsync(Stream archivo)
+    public Task<List<RegistroTipoCambioDto>> ParsearAsync(Stream archivo, Action<int>? onProgress = null)
     {
         var resultado  = new List<RegistroTipoCambioDto>();
         var sheetNames = archivo.GetSheetNames();
@@ -80,6 +80,7 @@ public class TipoCambioParser : ITipoCambioParser
                     Mes     = mes,
                     TasaCop = tasaCop,
                 });
+                if (resultado.Count % 100 == 0) onProgress?.Invoke(resultado.Count);
             }
             catch (Exception ex)
             {

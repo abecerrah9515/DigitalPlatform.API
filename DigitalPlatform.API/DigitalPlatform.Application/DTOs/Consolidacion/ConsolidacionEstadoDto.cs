@@ -17,7 +17,8 @@ public class ConsolidacionEstadoDto
 public class FuenteEstadoDto
 {
     public string Archivo { get; set; } = string.Empty; // GR55, Horas, Planeacion, TDC, MaestroReferencias
-    public string Estado { get; set; } = string.Empty;  // Exitoso, Fallido, Pendiente
+    public string Estado { get; set; } = string.Empty;  // Pendiente, Procesando, Exitoso, Fallido
     public int RegistrosProcesados { get; set; }
+    public int TotalRegistros { get; set; }             // 0 mientras no se conozca el total
     public string? Error { get; set; }
 }
