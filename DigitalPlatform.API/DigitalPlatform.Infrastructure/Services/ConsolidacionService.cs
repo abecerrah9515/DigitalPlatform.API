@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
+using Npgsql;
+using NpgsqlTypes;
 using DigitalPlatform.Application.Common;
 using DigitalPlatform.Application.DTOs.Consolidacion;
 using DigitalPlatform.Application.DTOs.Fuentes;
@@ -25,8 +27,12 @@ public class ConsolidacionService : IConsolidacionService
     private static readonly System.Text.RegularExpressions.Regex _htmlTagRegex =
         new("<[^>]*>", System.Text.RegularExpressions.RegexOptions.Compiled);
 
-    private static string LimpiarHtml(string? valor) =>
-        string.IsNullOrWhiteSpace(valor) ? string.Empty : _htmlTagRegex.Replace(valor, string.Empty).Trim();
+    private static string LimpiarHtml(string? valor)
+    {
+        if (string.IsNullOrWhiteSpace(valor)) return string.Empty;
+        if (!valor.Contains('<')) return valor.Trim();
+        return _htmlTagRegex.Replace(valor, string.Empty).Trim();
+    }
 
     private readonly ApplicationDbContext _db;
     private readonly IGR55Parser _gr55Parser;
@@ -58,7 +64,7 @@ public class ConsolidacionService : IConsolidacionService
     }
 
     // ── Composite key shared across all aggregation dictionaries ────────────
-    private record ClaveProyecto(string CodProyecto, int Año, int Mes);
+    private record struct ClaveProyecto(string CodProyecto, int Año, int Mes);
 
     // ── GR55 aggregation bucket ──────────────────────────────────────────────
     private record Gr55Bucket(
@@ -131,43 +137,36 @@ public class ConsolidacionService : IConsolidacionService
             };
         }
 
-        var warnings = new List<string>();
+        var warnings = new ConcurrentBag<string>();
 
         try
         {
             var rutaBase = _config["ConsolidacionArchivos:RutaBase"] ?? string.Empty;
 
-            // ── Parsear los 5 archivos — actualizar caché antes/durante/después ──
-            var gr55Registros = await ParsearArchivo(
-                consolidacionId,
+            // ── Parsear los 5 archivos en paralelo con Task.Run (parsers son CPU-bound síncronos) ──
+            var gr55Task    = Task.Run(() => ParsearArchivo(consolidacionId,
                 Path.Combine(rutaBase, _config["ConsolidacionArchivos:GR55"]               ?? "GR55.xlsx"),
-                _gr55Parser.ParsearAsync, "GR55", warnings);
-            log.RegistrosExitosos++; await _db.SaveChangesAsync();
-
-            var horasRegistros = await ParsearArchivo(
-                consolidacionId,
+                _gr55Parser.ParsearAsync, "GR55", warnings));
+            var horasTask   = Task.Run(() => ParsearArchivo(consolidacionId,
                 Path.Combine(rutaBase, _config["ConsolidacionArchivos:Horas"]              ?? "Horas.xlsx"),
-                _horasParser.ParsearAsync, "Horas", warnings);
-            log.RegistrosExitosos++; await _db.SaveChangesAsync();
-
-            var planeacionRegistros = await ParsearArchivo(
-                consolidacionId,
+                _horasParser.ParsearAsync, "Horas", warnings));
+            var planTask    = Task.Run(() => ParsearArchivo(consolidacionId,
                 Path.Combine(rutaBase, _config["ConsolidacionArchivos:Planeacion"]         ?? "Planeacion.xlsx"),
-                _planeacionParser.ParsearAsync, "Planeacion", warnings);
-            log.RegistrosExitosos++; await _db.SaveChangesAsync();
-
-            var tdcRegistros = await ParsearArchivo(
-                consolidacionId,
+                _planeacionParser.ParsearAsync, "Planeacion", warnings));
+            var tdcTask     = Task.Run(() => ParsearArchivo(consolidacionId,
                 Path.Combine(rutaBase, _config["ConsolidacionArchivos:TipoCambio"]         ?? "TDC.xlsx"),
-                _tipoCambioParser.ParsearAsync, "TipoCambio", warnings);
-            log.RegistrosExitosos++; await _db.SaveChangesAsync();
-
-            var maestro = await ParsearArchivo(
-                consolidacionId,
+                _tipoCambioParser.ParsearAsync, "TipoCambio", warnings));
+            var maestroTask = Task.Run(() => ParsearArchivo(consolidacionId,
                 Path.Combine(rutaBase, _config["ConsolidacionArchivos:MaestroReferencias"] ?? "MaestroReferencias.xlsx"),
-                _maestroParser.ParsearAsync, "MaestroReferencias", warnings)
-                ?? new MaestroReferenciasDto();
-            log.RegistrosExitosos++; await _db.SaveChangesAsync();
+                _maestroParser.ParsearAsync, "MaestroReferencias", warnings));
+
+            await Task.WhenAll(gr55Task, horasTask, planTask, tdcTask, maestroTask);
+
+            var gr55Registros       = await gr55Task;
+            var horasRegistros      = await horasTask;
+            var planeacionRegistros = await planTask;
+            var tdcRegistros        = await tdcTask;
+            var maestro             = await maestroTask ?? new MaestroReferenciasDto();
 
             // ── Persistir tasas COP en TiposCambio ─────────────────────────
             await PersistirTiposCambioAsync(tdcRegistros ?? []);
@@ -262,10 +261,9 @@ public class ConsolidacionService : IConsolidacionService
             }
 
             // ── Unión de todas las claves únicas ─────────────────────────────
-            var todasLasClaves = gr55Agg.Keys
-                .Union(planAgg.Keys)
-                .Union(horasAgg.Keys)
-                .ToHashSet();
+            var todasLasClaves = new HashSet<ClaveProyecto>(gr55Agg.Keys);
+            todasLasClaves.UnionWith(planAgg.Keys);
+            todasLasClaves.UnionWith(horasAgg.Keys);
 
             // ── Crear entidades Proyecto ──────────────────────────────────────
             int exitosos = 0, fallidos = 0;
@@ -331,7 +329,11 @@ public class ConsolidacionService : IConsolidacionService
                 }
             }
 
-            _db.Proyectos.AddRange(proyectos);
+            await BulkInsertProyectosAsync(proyectos);
+
+            // Eliminar proyectos de consolidaciones previas para mantener la tabla liviana
+            await _db.Database.ExecuteSqlRawAsync(
+                "DELETE FROM \"Proyectos\" WHERE \"ConsolidacionId\" != {0}", log.Id);
 
             // ── Estado final y contadores reales ──────────────────────────────
             var estado = exitosos == 0
@@ -473,6 +475,51 @@ public class ConsolidacionService : IConsolidacionService
     }
 
     // ════════════════════════════════════════════════════════════════════════
+    // Helper: insertar proyectos masivamente vía PostgreSQL COPY (mucho más rápido que EF AddRange)
+    // ════════════════════════════════════════════════════════════════════════
+    private async Task BulkInsertProyectosAsync(List<Proyecto> proyectos)
+    {
+        if (proyectos.Count == 0) return;
+
+        var connStr = _config.GetConnectionString("DefaultConnection")!;
+        await using var conn = new NpgsqlConnection(connStr);
+        await conn.OpenAsync();
+
+        await using var writer = await conn.BeginBinaryImportAsync(
+            """
+            COPY "Proyectos" ("ConsolidacionId","CodProyecto","Año","Mes",
+                "IngresoReal","CostoReal","IngresoPlaneado","CostoPlaneado","Horas",
+                "Sociedad","Pais","CeBe","Industria","Vertical","Area","Cliente","Responsable")
+            FROM STDIN (FORMAT BINARY)
+            """);
+
+        foreach (var p in proyectos)
+        {
+            await writer.StartRowAsync();
+            await writer.WriteAsync(p.ConsolidacionId,  NpgsqlDbType.Integer);
+            await writer.WriteAsync(p.CodProyecto,      NpgsqlDbType.Varchar);
+            await writer.WriteAsync(p.Año,              NpgsqlDbType.Integer);
+            await writer.WriteAsync(p.Mes,              NpgsqlDbType.Integer);
+            await writer.WriteAsync(p.IngresoReal,      NpgsqlDbType.Numeric);
+            await writer.WriteAsync(p.CostoReal,        NpgsqlDbType.Numeric);
+            await writer.WriteAsync(p.IngresoPlaneado,  NpgsqlDbType.Numeric);
+            await writer.WriteAsync(p.CostoPlaneado,    NpgsqlDbType.Numeric);
+            await writer.WriteAsync(p.Horas,            NpgsqlDbType.Numeric);
+            await writer.WriteAsync(p.Sociedad,         NpgsqlDbType.Varchar);
+            await writer.WriteAsync(p.Pais,             NpgsqlDbType.Varchar);
+            await writer.WriteAsync(p.CeBe,             NpgsqlDbType.Varchar);
+            await writer.WriteAsync(p.Industria,        NpgsqlDbType.Varchar);
+            await writer.WriteAsync(p.Vertical,         NpgsqlDbType.Varchar);
+            await writer.WriteAsync(p.Area,             NpgsqlDbType.Varchar);
+            await writer.WriteAsync(p.Cliente,          NpgsqlDbType.Varchar);
+            await writer.WriteAsync(p.Responsable,      NpgsqlDbType.Varchar);
+        }
+
+        await writer.CompleteAsync();
+        _logger.LogInformation("BulkInsert: {N} proyectos insertados vía COPY.", proyectos.Count);
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
     // Helper: persistir TiposCambio
     // ════════════════════════════════════════════════════════════════════════
     private async Task PersistirTiposCambioAsync(List<RegistroTipoCambioDto> registros)
@@ -508,7 +555,7 @@ public class ConsolidacionService : IConsolidacionService
         string ruta,
         Func<Stream, Action<int>?, Task<T>> parser,
         string nombre,
-        List<string> warnings) where T : class
+        ConcurrentBag<string> warnings) where T : class
     {
         // Marcar como Procesando en caché (visible de inmediato al polling)
         ActualizarFuenteEnCache(consolidacionId, nombre, "Procesando", 0, 0, null);

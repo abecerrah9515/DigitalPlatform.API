@@ -47,7 +47,7 @@ namespace DigitalPlatform.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("CeBes");
+                    b.ToTable("CeBes", (string)null);
                 });
 
             modelBuilder.Entity("DigitalPlatform.Domain.Entities.ConsolidacionLog", b =>
@@ -90,7 +90,7 @@ namespace DigitalPlatform.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("ConsolidacionLogs");
+                    b.ToTable("ConsolidacionLogs", (string)null);
                 });
 
             modelBuilder.Entity("DigitalPlatform.Domain.Entities.Industria", b =>
@@ -113,7 +113,7 @@ namespace DigitalPlatform.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("Industrias");
+                    b.ToTable("Industrias", (string)null);
                 });
 
             modelBuilder.Entity("DigitalPlatform.Domain.Entities.Proyecto", b =>
@@ -202,7 +202,7 @@ namespace DigitalPlatform.Infrastructure.Migrations
 
                     b.HasIndex("ConsolidacionId");
 
-                    b.ToTable("Proyectos");
+                    b.ToTable("Proyectos", (string)null);
                 });
 
             modelBuilder.Entity("DigitalPlatform.Domain.Entities.Sociedad", b =>
@@ -230,7 +230,7 @@ namespace DigitalPlatform.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("Sociedades");
+                    b.ToTable("Sociedades", (string)null);
                 });
 
             modelBuilder.Entity("DigitalPlatform.Domain.Entities.TipoCambio", b =>
@@ -261,7 +261,7 @@ namespace DigitalPlatform.Infrastructure.Migrations
                     b.HasIndex("Año", "Mes", "Moneda")
                         .IsUnique();
 
-                    b.ToTable("TiposCambio");
+                    b.ToTable("TiposCambio", (string)null);
                 });
 
             modelBuilder.Entity("DigitalPlatform.Domain.Entities.Proyecto", b =>
