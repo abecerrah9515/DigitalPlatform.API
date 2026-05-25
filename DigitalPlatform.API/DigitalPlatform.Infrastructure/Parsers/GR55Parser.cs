@@ -8,6 +8,7 @@ namespace DigitalPlatform.Infrastructure.Parsers;
 
 public class GR55Parser : IGR55Parser
 {
+    private const string NombreArchivo = "GR55.xlsx";
     private readonly ILogger<GR55Parser> _logger;
     private static readonly Regex PepTokenRegex =
         new(@"(?i)\bPEP\s+([\w\-]+)", RegexOptions.Compiled);
@@ -35,6 +36,7 @@ public class GR55Parser : IGR55Parser
             var filas = archivo.Query(useHeaderRow: true, sheetName: sheetName);
             var validado = false;
             var omitir   = false;
+            var numFila  = 2; // fila 1 = encabezado; datos empiezan en fila 2
 
             foreach (IDictionary<string, object> fila in filas)
             {
@@ -59,35 +61,43 @@ public class GR55Parser : IGR55Parser
                     if (string.IsNullOrWhiteSpace(elementoPep))
                     {
                         if (!texto.StartsWith("PEP", StringComparison.OrdinalIgnoreCase))
+                        {
+                            numFila++;
                             continue;
+                        }
 
                         var match = PepTokenRegex.Match(texto);
-                        if (!match.Success) continue;
+                        if (!match.Success) { numFila++; continue; }
                         elementoPep = match.Groups[1].Value;
                     }
 
                     // Normalizar a código de proyecto raíz: "1-0000032365-2" → "1-0000032365"
                     elementoPep = WbsSufijoRegex.Replace(elementoPep.Trim(), string.Empty);
-                    if (string.IsNullOrWhiteSpace(elementoPep)) continue;
+                    if (string.IsNullOrWhiteSpace(elementoPep)) { numFila++; continue; }
 
                     resultado.Add(new RegistroGR55Dto
                     {
                         SocReceptora         = ExcelParserHelper.GetString(row, "soc.receptora"),
-                        PeriodoContable      = ExcelParserHelper.GetInt(row, "periodo contable"),
-                        Ejercicio            = ExcelParserHelper.GetInt(row, "ejercicio"),
+                        PeriodoContable      = ExcelParserHelper.GetIntRequired(row, "periodo contable"),
+                        Ejercicio            = ExcelParserHelper.GetIntRequired(row, "ejercicio"),
                         NumeroCuenta         = ExcelParserHelper.GetString(row, "numero de cuenta"),
                         Denominacion         = ExcelParserHelper.GetString(row, "denominacion"),
                         ElementoPEP          = elementoPep,
                         CentroBeneficio      = ExcelParserHelper.GetString(row, "centro de beneficio"),
                         Texto                = texto,
-                        ValorMonedaLocalCeBe = ExcelParserHelper.GetDecimal(row, "en moneda local centro de beneficio") * -1,
+                        ValorMonedaLocalCeBe = ExcelParserHelper.GetDecimalRequired(row, "en moneda local centro de beneficio") * -1,
                         ClaveMonedaLocalCeBe = ExcelParserHelper.GetString(row, "clave moneda ml cebe"),
                     });
                     if (resultado.Count % 100 == 0) onProgress?.Invoke(resultado.Count);
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogWarning(ex, "GR55 hoja '{Sheet}': error en fila ignorado.", sheetName);
+                    _logger.LogWarning("{Archivo} — hoja '{Sheet}', fila {Fila}: {Mensaje}",
+                        NombreArchivo, sheetName, numFila, ex.Message);
+                }
+                finally
+                {
+                    numFila++;
                 }
             }
         }

@@ -7,6 +7,7 @@ namespace DigitalPlatform.Infrastructure.Parsers;
 
 public class HorasParser : IHorasParser
 {
+    private const string NombreArchivo  = "Horas.xlsx";
     private const string HojaOrigen    = "qData";
     private const string EstadoAceptado = "Accepted";
 
@@ -37,6 +38,7 @@ public class HorasParser : IHorasParser
 
         var filas    = archivo.Query(useHeaderRow: true, sheetName: hoja);
         var validado = false;
+        var numFila  = 2;
 
         foreach (IDictionary<string, object> fila in filas)
         {
@@ -52,7 +54,10 @@ public class HorasParser : IHorasParser
             {
                 var estado = ExcelParserHelper.GetString(row, "estado");
                 if (!estado.Equals(EstadoAceptado, StringComparison.OrdinalIgnoreCase))
+                {
+                    numFila++;
                     continue;
+                }
 
                 // proyecto: "1-0000034220 - Nombre..." → "1-0000034220"
                 var rawProyecto = ExcelParserHelper.GetString(row, "proyecto");
@@ -68,16 +73,21 @@ public class HorasParser : IHorasParser
                     Proyecto     = proyecto,
                     Sociedad     = ExcelParserHelper.GetString(row, "proyecto_sociedad_fi"),
                     Industria    = ExcelParserHelper.GetString(row, "proyecto_industria"),
-                    Año          = ExcelParserHelper.GetInt(row, "ano"),
-                    Mes          = ExcelParserHelper.GetInt(row, "mes"),
-                    Horas        = ExcelParserHelper.GetDecimal(row, "horas"),
+                    Año          = ExcelParserHelper.GetIntRequired(row, "ano"),
+                    Mes          = ExcelParserHelper.GetIntRequired(row, "mes"),
+                    Horas        = ExcelParserHelper.GetDecimalRequired(row, "horas"),
                     Brm          = ExcelParserHelper.GetString(row, "brm"),
                 });
                 if (resultado.Count % 100 == 0) onProgress?.Invoke(resultado.Count);
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Horas: error en fila ignorado.");
+                _logger.LogWarning("{Archivo} — hoja '{Sheet}', fila {Fila}: {Mensaje}",
+                    NombreArchivo, HojaOrigen, numFila, ex.Message);
+            }
+            finally
+            {
+                numFila++;
             }
         }
 

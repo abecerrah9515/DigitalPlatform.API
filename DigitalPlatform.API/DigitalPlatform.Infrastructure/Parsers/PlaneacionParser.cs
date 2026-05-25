@@ -19,7 +19,8 @@ file static class PlaneacionCampoHelper
 
 public class PlaneacionParser : IPlaneacionParser
 {
-    private const string HojaOrigen = "qData";
+    private const string NombreArchivo = "Planeacion.xlsx";
+    private const string HojaOrigen   = "qData";
 
     // Columnas mínimas requeridas según HUE-02
     private static readonly string[] _columnasRequeridas =
@@ -47,6 +48,7 @@ public class PlaneacionParser : IPlaneacionParser
 
         var filas    = archivo.Query(useHeaderRow: true, sheetName: hoja);
         var validado = false;
+        var numFila  = 2;
 
         foreach (IDictionary<string, object> fila in filas)
         {
@@ -76,10 +78,10 @@ public class PlaneacionParser : IPlaneacionParser
                 {
                     Cliente            = ExcelParserHelper.GetString(row, "cliente"),
                     Proyecto           = proyecto,
-                    Año                = ExcelParserHelper.GetInt(row, "ano"),
-                    Mes                = ExcelParserHelper.GetInt(row, "mes"),
-                    IngresoPrevistoEur = ExcelParserHelper.GetDecimal(row, "ingreso_previsto_eur"),
-                    CostePrevistoEur   = ExcelParserHelper.GetDecimal(row, "coste_previsto_eur"),
+                    Año                = ExcelParserHelper.GetIntRequired(row, "ano"),
+                    Mes                = ExcelParserHelper.GetIntRequired(row, "mes"),
+                    IngresoPrevistoEur = ExcelParserHelper.GetDecimalRequired(row, "ingreso_previsto_eur"),
+                    CostePrevistoEur   = ExcelParserHelper.GetDecimalRequired(row, "coste_previsto_eur"),
                     Cebe               = cebe,
                     Industria          = industria,
                     Brm                = ExcelParserHelper.GetString(row, "brm"),
@@ -89,7 +91,12 @@ public class PlaneacionParser : IPlaneacionParser
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Planeación: error en fila ignorado.");
+                _logger.LogWarning("{Archivo} — hoja '{Sheet}', fila {Fila}: {Mensaje}",
+                    NombreArchivo, HojaOrigen, numFila, ex.Message);
+            }
+            finally
+            {
+                numFila++;
             }
         }
 

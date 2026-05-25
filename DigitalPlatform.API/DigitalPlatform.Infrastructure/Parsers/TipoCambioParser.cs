@@ -8,6 +8,7 @@ namespace DigitalPlatform.Infrastructure.Parsers;
 
 public class TipoCambioParser : ITipoCambioParser
 {
+    private const string NombreArchivo = "TDC.xlsx";
     private readonly ILogger<TipoCambioParser> _logger;
 
     public TipoCambioParser(ILogger<TipoCambioParser> logger) => _logger = logger;
@@ -29,6 +30,7 @@ public class TipoCambioParser : ITipoCambioParser
 
         var filas    = archivo.Query(useHeaderRow: true, sheetName: primerHoja);
         var validado = false;
+        var numFila  = 2;
 
         foreach (IDictionary<string, object> fila in filas)
         {
@@ -56,7 +58,9 @@ public class TipoCambioParser : ITipoCambioParser
                     if (!DateOnly.TryParseExact(fechaStr, "dd.MM.yyyy",
                             CultureInfo.InvariantCulture, DateTimeStyles.None, out fecha))
                     {
-                        _logger.LogWarning("TDC: fecha inválida '{Val}', se omite.", fechaStr);
+                        _logger.LogWarning("{Archivo} — hoja '{Sheet}', fila {Fila}: fecha inválida '{Val}', se omite.",
+                            NombreArchivo, primerHoja, numFila, fechaStr);
+                        numFila++;
                         continue;
                     }
                 }
@@ -66,12 +70,14 @@ public class TipoCambioParser : ITipoCambioParser
                     !int.TryParse(partes[0], out int año) ||
                     !int.TryParse(partes[1], out int mes))
                 {
-                    _logger.LogWarning("TDC: período inválido '{Val}', se omite.", periodoStr);
+                    _logger.LogWarning("{Archivo} — hoja '{Sheet}', fila {Fila}: período inválido '{Val}', se omite.",
+                        NombreArchivo, primerHoja, numFila, periodoStr);
+                    numFila++;
                     continue;
                 }
 
                 // "tasas" es la tasa COP/USD para convertir USD→COP o COP→USD
-                var tasaCop = ExcelParserHelper.GetDecimal(row, "tasas");
+                var tasaCop = ExcelParserHelper.GetDecimalRequired(row, "tasas");
 
                 resultado.Add(new RegistroTipoCambioDto
                 {
@@ -84,7 +90,12 @@ public class TipoCambioParser : ITipoCambioParser
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "TDC: error en fila ignorado.");
+                _logger.LogWarning("{Archivo} — hoja '{Sheet}', fila {Fila}: {Mensaje}",
+                    NombreArchivo, primerHoja, numFila, ex.Message);
+            }
+            finally
+            {
+                numFila++;
             }
         }
 

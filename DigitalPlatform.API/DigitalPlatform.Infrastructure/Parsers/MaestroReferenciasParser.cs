@@ -7,6 +7,7 @@ namespace DigitalPlatform.Infrastructure.Parsers;
 
 public class MaestroReferenciasParser : IMaestroReferenciasParser
 {
+    private const string NombreArchivo = "MaestroReferencias.xlsx";
     private readonly ILogger<MaestroReferenciasParser> _logger;
 
     public MaestroReferenciasParser(ILogger<MaestroReferenciasParser> logger) => _logger = logger;
@@ -46,6 +47,7 @@ public class MaestroReferenciasParser : IMaestroReferenciasParser
         }
 
         var resultado = new List<T>();
+        var numFila   = 2;
         foreach (IDictionary<string, object> fila in archivo.Query(useHeaderRow: true, sheetName: hoja))
         {
             var row = ExcelParserHelper.NormalizeRow(fila);
@@ -56,9 +58,14 @@ public class MaestroReferenciasParser : IMaestroReferenciasParser
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Maestro hoja '{Sheet}': error en fila ignorado.", hoja);
+                _logger.LogWarning("{Archivo} — hoja '{Sheet}', fila {Fila}: {Mensaje}",
+                    NombreArchivo, hoja, numFila, ex.Message);
             }
-            totalFilas++;
+            finally
+            {
+                numFila++;
+                totalFilas++;
+            }
             if (totalFilas % 100 == 0) onProgress?.Invoke(totalFilas);
         }
         return resultado;

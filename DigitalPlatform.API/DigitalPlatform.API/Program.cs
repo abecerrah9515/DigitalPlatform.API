@@ -1,3 +1,4 @@
+using DigitalPlatform.API.Middleware;
 using DigitalPlatform.Application.Interfaces;
 using DigitalPlatform.Application.Interfaces.Parsers;
 using DigitalPlatform.Infrastructure.Parsers;
@@ -54,10 +55,12 @@ if (app.Environment.IsDevelopment())
     app.UseSwagger();
     app.UseSwaggerUI(c => c.SwaggerEndpoint("/swagger/v1/swagger.json", "Plataforma Digital API v1"));
 }
- 
+
+app.UseMiddleware<GlobalExceptionMiddleware>();
 app.UseCors("FrontendDev");
 app.UseRouting();
 // app.UseHttpsRedirection(); // desactivado — el túnel de desarrollo maneja TLS
+app.UseMiddleware<ApiKeyMiddleware>();
 app.UseAuthorization();
 app.MapControllers();
  

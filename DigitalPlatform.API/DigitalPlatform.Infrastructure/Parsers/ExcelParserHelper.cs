@@ -48,6 +48,24 @@ internal static class ExcelParserHelper
         };
     }
 
+    // Versión estricta: lanza FormatException con nombre de columna si el valor no es convertible.
+    // Usar para campos críticos (Año, Mes) donde 0 no es un fallback aceptable.
+    internal static int GetIntRequired(Dictionary<string, object?> row, string key)
+    {
+        if (!row.TryGetValue(key, out var val) || val is null || val.ToString() == "")
+            throw new FormatException($"columna '{key}': valor vacío o ausente.");
+        return val switch
+        {
+            double d  => (int)d,
+            int i     => i,
+            long l    => (int)l,
+            decimal m => (int)m,
+            _ => int.TryParse(val.ToString(), out var p)
+                 ? p
+                 : throw new FormatException($"columna '{key}': valor no numérico '{val}'.")
+        };
+    }
+
     internal static decimal GetDecimal(Dictionary<string, object?> row, string key)
     {
         if (!row.TryGetValue(key, out var val)) return 0m;
@@ -59,6 +77,25 @@ internal static class ExcelParserHelper
             long l    => l,
             _         => decimal.TryParse(val?.ToString(), NumberStyles.Any,
                              CultureInfo.InvariantCulture, out var p) ? p : 0m
+        };
+    }
+
+    // Versión estricta: lanza FormatException con nombre de columna si el valor no es convertible.
+    // Usar para campos monetarios donde un 0 silencioso distorsionaría los totales.
+    internal static decimal GetDecimalRequired(Dictionary<string, object?> row, string key)
+    {
+        if (!row.TryGetValue(key, out var val) || val is null || val.ToString() == "")
+            throw new FormatException($"columna '{key}': valor vacío o ausente.");
+        return val switch
+        {
+            double d  => (decimal)d,
+            decimal m => m,
+            int i     => i,
+            long l    => l,
+            _ => decimal.TryParse(val?.ToString(), NumberStyles.Any,
+                     CultureInfo.InvariantCulture, out var p)
+                 ? p
+                 : throw new FormatException($"columna '{key}': valor no numérico '{val}'.")
         };
     }
 
