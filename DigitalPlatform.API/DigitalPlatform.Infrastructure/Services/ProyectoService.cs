@@ -133,8 +133,11 @@ public class ProyectoService : IProyectoService
             ? filtro.Mes.Max()
             : DateTime.Now.Month;
 
-        // Acumulado YTD: año activo, desde mes 1 hasta mes activo
-        var datos = todosDatos.Where(d => d.Año == añoActivo && d.Mes <= mesActivo).ToList();
+        // Si el usuario filtró por mes → solo ese mes exacto.
+        // Sin filtro de mes → YTD (acumulado desde mes 1 hasta el mes activo).
+        var datos = filtro.Mes?.Length > 0
+            ? todosDatos.Where(d => d.Año == añoActivo && d.Mes == mesActivo).ToList()
+            : todosDatos.Where(d => d.Año == añoActivo && d.Mes <= mesActivo).ToList();
         if (datos.Count == 0)
             return ApiResponse<KpisDto>.Ok(new KpisDto(), "Sin datos para el período activo.");
 
@@ -679,13 +682,13 @@ public class ProyectoService : IProyectoService
         var f = new ProyectoFiltros
         {
             Moneda      = filtro.Moneda ?? "COP",
-            Año         = filtro.Año.HasValue         ? [filtro.Año.Value]         : null,
-            Mes         = filtro.Mes.HasValue         ? [filtro.Mes.Value]         : null,
-            Cliente     = filtro.Cliente     != null  ? [filtro.Cliente]           : null,
-            CodProyecto = filtro.CodProyecto != null  ? [filtro.CodProyecto]       : null,
-            Vertical    = filtro.Industria   != null  ? [filtro.Industria]         : null,
-            Area        = filtro.Area        != null  ? [filtro.Area]              : null,
-            Pais        = filtro.Sociedad    != null  ? [filtro.Sociedad]          : null,
+            Año         = filtro.Año?.Length         > 0 ? filtro.Año                : null,
+            Mes         = filtro.Mes?.Length         > 0 ? filtro.Mes                : null,
+            Cliente     = filtro.Cliente     != null     ? [filtro.Cliente]           : null,
+            CodProyecto = filtro.CodProyecto != null     ? [filtro.CodProyecto]       : null,
+            Vertical    = filtro.Industria   != null     ? [filtro.Industria]         : null,
+            Area        = filtro.Area        != null     ? [filtro.Area]              : null,
+            Pais        = filtro.Sociedad    != null     ? [filtro.Sociedad]          : null,
         };
 
         var (datos, hayDatos) = await CargarDatosAsync(f);

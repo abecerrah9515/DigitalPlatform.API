@@ -8,8 +8,8 @@ public class ProyectoFiltroDto
     public string? Area { get; set; }
     public string? Sociedad { get; set; }
     public string Moneda { get; set; } = "USD";
-    public int? Año { get; set; }
-    public int? Mes { get; set; }
+    public int[]? Año { get; set; }
+    public int[]? Mes { get; set; }
     public int Pagina { get; set; } = 1;
     public int TamañoPagina { get; set; } = 10;
 }
