@@ -648,16 +648,15 @@ public class ProyectoService : IProyectoService
             Responsable      = d.Responsable,
             Area             = d.Area,
             Sociedad         = d.Pais,
-            Ingreso          = Math.Round((d.IngresoReal + d.IngresoPlaneado) * d.Factor, 2),
-            Costo            = Math.Round((d.CostoReal   + d.CostoPlaneado)   * d.Factor, 2),
-            GM               = Math.Round((d.IngresoReal + d.IngresoPlaneado - d.CostoReal - d.CostoPlaneado) * d.Factor, 2),
-            GMPct            = (d.IngresoReal + d.IngresoPlaneado) * d.Factor != 0
-                                   ? Math.Round(((d.IngresoReal + d.IngresoPlaneado - d.CostoReal - d.CostoPlaneado) * d.Factor)
-                                                / ((d.IngresoReal + d.IngresoPlaneado) * d.Factor) * 100m, 2)
+            Ingreso          = Math.Round(d.IngresoReal * d.Factor, 2),
+            Costo            = Math.Round(d.CostoReal   * d.Factor, 2),
+            GM               = Math.Round((d.IngresoReal - d.CostoReal) * d.Factor, 2),
+            GMPct            = d.IngresoReal != 0
+                                   ? Math.Round((d.IngresoReal - d.CostoReal) / d.IngresoReal * 100m, 2)
                                    : 0m,
             Horas            = d.Horas,
             TarifaEntrega    = d.Horas != 0
-                                   ? Math.Round((d.IngresoReal + d.IngresoPlaneado) * d.Factor / d.Horas, 2)
+                                   ? Math.Round(d.IngresoReal * d.Factor / d.Horas, 2)
                                    : 0m,
         }).ToList();
 
