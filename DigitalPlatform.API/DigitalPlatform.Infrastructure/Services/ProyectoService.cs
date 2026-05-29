@@ -600,8 +600,8 @@ public class ProyectoService : IProyectoService
             .GroupBy(d => d.Cliente)
             .Select(g =>
             {
-                var ing   = g.Sum(d => d.IngresoReal * d.Factor);
-                var costo = g.Sum(d => d.CostoReal   * d.Factor);
+                var ing   = g.Sum(d => IngresoEfectivo(d) * d.Factor);
+                var costo = g.Sum(d => CostoEfectivo(d)   * d.Factor);
                 var gmProm = ing != 0 ? (ing - costo) / ing * 100m : 0m;
                 return new { Cliente = g.Key, GmPromedio = gmProm };
             })
@@ -622,8 +622,8 @@ public class ProyectoService : IProyectoService
             .GroupBy(d => new { d.Cliente, d.Año, d.Mes })
             .Select(g =>
             {
-                var ing   = g.Sum(d => d.IngresoReal * d.Factor);
-                var costo = g.Sum(d => d.CostoReal   * d.Factor);
+                var ing   = g.Sum(d => IngresoEfectivo(d) * d.Factor);
+                var costo = g.Sum(d => CostoEfectivo(d)   * d.Factor);
                 var gm    = ing != 0 ? (ing - costo) / ing * 100m : 0m;
                 return new HeatmapCeldaDto
                 {
