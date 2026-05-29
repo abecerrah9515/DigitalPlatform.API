@@ -211,10 +211,11 @@ public class ConsolidacionService : IConsolidacionService
                            ?? new Gr55Bucket(0m, 0m, string.Empty, string.Empty);
 
                 var esIngreso = clasif?.Equals("Ingreso", StringComparison.OrdinalIgnoreCase) == true;
+                var esCosto   = clasif?.Equals("Costo",   StringComparison.OrdinalIgnoreCase) == true;
 
                 gr55Agg[clave] = new Gr55Bucket(
                     IngresoReal     : prev.IngresoReal + (esIngreso ?  valor : 0m),
-                    CostoReal       : prev.CostoReal   + (esIngreso ? 0m : -valor),
+                    CostoReal       : prev.CostoReal   + (esCosto   ? -valor : 0m),
                     SocReceptora    : r.SocReceptora,
                     CentroBeneficio : r.CentroBeneficio);
             }
