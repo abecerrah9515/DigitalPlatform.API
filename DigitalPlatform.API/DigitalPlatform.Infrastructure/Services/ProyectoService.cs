@@ -86,15 +86,22 @@ public class ProyectoService : IProyectoService
                 p.Año, p.Mes, p.Cliente, p.CodProyecto, p.Industria, p.Vertical,
                 p.Area, p.Sociedad, p.Pais, p.CeBe, p.Responsable,
                 p.IngresoReal, p.IngresoPlaneado, p.CostoReal, p.CostoPlaneado, p.Horas,
-                TasaCop = tc == null ? 1m : tc.Tasa
+                TasaCop = tc == null ? (decimal?)null : (decimal?)tc.Tasa
             }
         ).ToListAsync();
+
+        // Para periodos futuros sin TDC se usa la última tasa disponible como proxy,
+        // igual que hace ConsolidacionService al almacenar IngresoPlaneado.
+        var ultimaTasaCop = raw.Where(x => x.TasaCop.HasValue)
+                               .OrderByDescending(x => x.Año).ThenByDescending(x => x.Mes)
+                               .Select(x => x.TasaCop!.Value)
+                               .FirstOrDefault(1m);
 
         var datos = raw.Select(x => new Flat(
             x.Año, x.Mes, x.Cliente, x.CodProyecto, x.Industria, x.Vertical,
             x.Area, x.Sociedad, x.Pais, x.CeBe, x.Responsable,
             x.IngresoReal, x.IngresoPlaneado, x.CostoReal, x.CostoPlaneado, x.Horas,
-            Factor: moneda == "USD" ? 1m : x.TasaCop
+            Factor: moneda == "USD" ? 1m : (x.TasaCop ?? ultimaTasaCop)
         )).ToList();
 
         return (datos, true);
@@ -104,6 +111,17 @@ public class ProyectoService : IProyectoService
     private static string Label(int año, int mes) => $"{año}-{mes:D2}";
     private static decimal Semaforo_Ingreso(decimal real, decimal plan) =>
         real >= plan ? 0m : 1m; // 0=Verde, 1=Rojo (helper numérico)
+
+    // Periodos no cerrados usan valores proyectados (IngresoPlaneado/CostoPlaneado)
+    private static bool EsPeriodoCerrado(int año, int mes)
+    {
+        var hoy = DateTime.Now;
+        return año < hoy.Year || (año == hoy.Year && mes < hoy.Month);
+    }
+    private static decimal IngresoEfectivo(Flat d)
+        => EsPeriodoCerrado(d.Año, d.Mes) ? d.IngresoReal : d.IngresoPlaneado;
+    private static decimal CostoEfectivo(Flat d)
+        => EsPeriodoCerrado(d.Año, d.Mes) ? d.CostoReal : d.CostoPlaneado;
 
     // ════════════════════════════════════════════════════════════════════════
     // GET /api/kpis — 5 indicadores (Task 16)
@@ -119,40 +137,45 @@ public class ProyectoService : IProyectoService
         if (!hayDatos || todosDatos.Count == 0)
             return ApiResponse<KpisDto>.Ok(new KpisDto(), "Sin datos disponibles.");
 
-        // Año activo = filtro del usuario, o el año en curso (HUE-04: YTD del año activo)
-        var añoActivo = filtro.Año?.Length > 0
-            ? filtro.Año.Max()
-            : DateTime.Now.Year;
+        // Años seleccionados; null = sin filtro de año
+        var añosFiltro = filtro.Año?.Length > 0 ? filtro.Año : null;
+        var añoActivo  = añosFiltro?.Max() ?? DateTime.Now.Year;
 
-        // Si no hay datos para el año en curso, caer al máximo disponible
+        // Si no hay datos para el año activo, caer al máximo disponible
         if (!todosDatos.Any(d => d.Año == añoActivo))
             añoActivo = todosDatos.Max(d => d.Año);
 
-        // Mes activo = filtro del usuario, o el mes en curso (YTD hasta hoy)
+        // Mes de corte para YTD = mayor mes filtrado, o mes en curso
         var mesActivo = filtro.Mes?.Length > 0
             ? filtro.Mes.Max()
             : DateTime.Now.Month;
 
-        // Si el usuario filtró por mes → solo ese mes exacto.
-        // Sin filtro de mes → YTD (acumulado desde mes 1 hasta el mes activo).
+        // Con filtro de mes → todos los años/meses seleccionados (bug 142: multi-select).
+        // Sin filtro de mes → YTD: años pasados completos + año activo hasta mesActivo.
         var datos = filtro.Mes?.Length > 0
-            ? todosDatos.Where(d => d.Año == añoActivo && d.Mes == mesActivo).ToList()
-            : todosDatos.Where(d => d.Año == añoActivo && d.Mes <= mesActivo).ToList();
+            ? todosDatos.Where(d =>
+                (añosFiltro == null || añosFiltro.Contains(d.Año)) &&
+                filtro.Mes.Contains(d.Mes)
+              ).ToList()
+            : todosDatos.Where(d =>
+                (añosFiltro == null || añosFiltro.Contains(d.Año)) &&
+                (d.Año < añoActivo || d.Mes <= mesActivo)
+              ).ToList();
         if (datos.Count == 0)
             return ApiResponse<KpisDto>.Ok(new KpisDto(), "Sin datos para el período activo.");
 
         // ── Métricas base ────────────────────────────────────────────────────
-        var ingresoReal   = datos.Sum(d => d.IngresoReal      * d.Factor);
+        var ingresoEfect  = datos.Sum(d => IngresoEfectivo(d) * d.Factor);
         var ingresoPlan   = datos.Sum(d => d.IngresoPlaneado   * d.Factor);
-        var costoReal     = datos.Sum(d => d.CostoReal         * d.Factor);
+        var costoEfect    = datos.Sum(d => CostoEfectivo(d)   * d.Factor);
         var costoPlan     = datos.Sum(d => d.CostoPlaneado     * d.Factor);
         var horasTotal    = datos.Sum(d => d.Horas);
-        var gm            = ingresoReal - costoReal;
-        var gmPct         = ingresoReal != 0 ? gm / ingresoReal * 100m : 0m;
+        var gm            = ingresoEfect - costoEfect;
+        var gmPct         = ingresoEfect != 0 ? gm / ingresoEfect * 100m : 0m;
         var gmPlanPct     = ingresoPlan != 0 ? (ingresoPlan - costoPlan) / ingresoPlan * 100m : 0m;
         var gmDelta       = Math.Round(gmPct - gmPlanPct, 1);
-        var tarifa        = horasTotal  != 0 ? ingresoReal / horasTotal : 0m;
-        var cumplimiento  = ingresoPlan != 0 ? ingresoReal / ingresoPlan * 100m : 0m;
+        var tarifa        = horasTotal  != 0 ? ingresoEfect / horasTotal : 0m;
+        var cumplimiento  = ingresoPlan != 0 ? ingresoEfect / ingresoPlan * 100m : 0m;
         var cumplDelta    = Math.Round(cumplimiento - 100m, 1);
 
         var monedaLabel = (filtro.Moneda ?? "COP").ToUpperInvariant();
@@ -170,7 +193,7 @@ public class ProyectoService : IProyectoService
             .Select(g =>
             {
                 var h = g.Sum(d => d.Horas);
-                return (CodProyecto: g.Key, Tarifa: h != 0 ? g.Sum(d => d.IngresoReal * d.Factor) / h : 0m);
+                return (CodProyecto: g.Key, Tarifa: h != 0 ? g.Sum(d => IngresoEfectivo(d) * d.Factor) / h : 0m);
             })
             .OrderByDescending(x => x.Tarifa)
             .FirstOrDefault();
@@ -190,17 +213,15 @@ public class ProyectoService : IProyectoService
                     ? $"{_mesesAbr[primerPer.Mes - 1]}–{_mesesAbr[ultimoPer.Mes - 1]} {añoActivo}"
                     : $"{_mesesAbr[primerPer.Mes - 1]} {primerPer.Año}–{_mesesAbr[ultimoPer.Mes - 1]} {añoActivo}";
 
-        var subtituloGM = $"{_mesesAbr[ultimoPer.Mes - 1]} {añoActivo} | {(esCerrado ? "Total" : añoActivo.ToString())}";
-
         return ApiResponse<KpisDto>.Ok(new KpisDto
         {
             IngresoTotalReal = new KpiItemDto
             {
-                Valor      = Math.Round(ingresoReal, 2),
+                Valor      = Math.Round(ingresoEfect, 2),
                 Unidad     = monedaLabel,
-                Semaforo   = ingresoReal >= ingresoPlan ? "Verde" : "Rojo",
-                Tendencia  = ingresoReal >= ingresoPlan ? "Arriba" : "Abajo",
-                BadgeTexto = ingresoReal >= ingresoPlan ? "Sobre plan" : "Bajo plan",
+                Semaforo   = ingresoEfect >= ingresoPlan ? "Verde" : "Rojo",
+                Tendencia  = ingresoEfect >= ingresoPlan ? "Arriba" : "Abajo",
+                BadgeTexto = ingresoEfect >= ingresoPlan ? "Sobre plan" : "Bajo plan",
                 Subtitulo  = subtituloRango,
             },
             MargenGM = new KpiItemDto
@@ -210,7 +231,7 @@ public class ProyectoService : IProyectoService
                 Semaforo   = gmPct >= 40 ? "Verde" : gmPct >= 35 ? "Amarillo" : "Rojo",
                 Tendencia  = gmDelta >= 0 ? "Arriba" : "Abajo",
                 BadgeTexto = $"{(gmDelta >= 0 ? "▲" : "▼")} {Math.Abs(gmDelta)} pp vs plan",
-                Subtitulo  = subtituloGM,
+                Subtitulo  = subtituloRango,
             },
             HorasEntregadas = new KpiItemDto
             {
@@ -219,7 +240,7 @@ public class ProyectoService : IProyectoService
                 Semaforo   = "Gris",
                 Tendencia  = "Neutro",
                 BadgeTexto = proyMasHoras.CodProyecto != default ? proyMasHoras.CodProyecto : "—",
-                Subtitulo  = subtituloGM,
+                Subtitulo  = subtituloRango,
             },
             TarifaEntregaPromedio = new KpiItemDto
             {
@@ -228,7 +249,7 @@ public class ProyectoService : IProyectoService
                 Semaforo   = "Gris",
                 Tendencia  = "Neutro",
                 BadgeTexto = proyMayorTarifa.CodProyecto != default ? proyMayorTarifa.CodProyecto : "—",
-                Subtitulo  = subtituloGM,
+                Subtitulo  = subtituloRango,
             },
             CumplimientoIngresosPlan = new KpiItemDto
             {
@@ -648,15 +669,15 @@ public class ProyectoService : IProyectoService
             Responsable      = d.Responsable,
             Area             = d.Area,
             Sociedad         = d.Pais,
-            Ingreso          = Math.Round(d.IngresoReal * d.Factor, 2),
-            Costo            = Math.Round(d.CostoReal   * d.Factor, 2),
-            GM               = Math.Round((d.IngresoReal - d.CostoReal) * d.Factor, 2),
-            GMPct            = d.IngresoReal != 0
-                                   ? Math.Round((d.IngresoReal - d.CostoReal) / d.IngresoReal * 100m, 2)
+            Ingreso          = Math.Round(IngresoEfectivo(d) * d.Factor, 2),
+            Costo            = Math.Round(CostoEfectivo(d)   * d.Factor, 2),
+            GM               = Math.Round((IngresoEfectivo(d) - CostoEfectivo(d)) * d.Factor, 2),
+            GMPct            = IngresoEfectivo(d) != 0
+                                   ? Math.Round((IngresoEfectivo(d) - CostoEfectivo(d)) / IngresoEfectivo(d) * 100m, 2)
                                    : 0m,
             Horas            = d.Horas,
             TarifaEntrega    = d.Horas != 0
-                                   ? Math.Round(d.IngresoReal * d.Factor / d.Horas, 2)
+                                   ? Math.Round(IngresoEfectivo(d) * d.Factor / d.Horas, 2)
                                    : 0m,
         }).ToList();
 
@@ -712,15 +733,15 @@ public class ProyectoService : IProyectoService
                 Responsable   = d.Responsable,
                 Area          = d.Area,
                 Sociedad      = d.Pais,
-                Ingreso       = Math.Round(d.IngresoReal    * d.Factor, 2),
-                Costo         = Math.Round(d.CostoReal      * d.Factor, 2),
-                GM            = Math.Round((d.IngresoReal - d.CostoReal) * d.Factor, 2),
-                GMPorcentaje  = d.IngresoReal != 0
-                                    ? Math.Round((d.IngresoReal - d.CostoReal) / d.IngresoReal * 100m, 2)
+                Ingreso       = Math.Round(IngresoEfectivo(d) * d.Factor, 2),
+                Costo         = Math.Round(CostoEfectivo(d)   * d.Factor, 2),
+                GM            = Math.Round((IngresoEfectivo(d) - CostoEfectivo(d)) * d.Factor, 2),
+                GMPorcentaje  = IngresoEfectivo(d) != 0
+                                    ? Math.Round((IngresoEfectivo(d) - CostoEfectivo(d)) / IngresoEfectivo(d) * 100m, 2)
                                     : 0m,
                 Horas         = d.Horas,
                 TarifaEntrega = d.Horas != 0
-                                    ? Math.Round(d.IngresoReal * d.Factor / d.Horas, 2)
+                                    ? Math.Round(IngresoEfectivo(d) * d.Factor / d.Horas, 2)
                                     : 0m,
             })
             .ToList();
