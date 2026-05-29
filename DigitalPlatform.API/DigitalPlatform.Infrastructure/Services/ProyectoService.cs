@@ -311,7 +311,7 @@ public class ProyectoService : IProyectoService
                              .Distinct().OrderBy(v => v).ToListAsync();
         var paises     = await Sin("pais").Select(p => p.Pais).Where(v => v != "")
                              .Distinct().OrderBy(v => v).ToListAsync();
-        var años       = await Sin("año").Select(p => p.Año)
+        var años       = await Sin("año").Select(p => p.Año).Where(v => v >= 2025)
                              .Distinct().OrderBy(v => v).ToListAsync();
         var meses      = await Sin("mes").Select(p => p.Mes)
                              .Distinct().OrderBy(v => v).ToListAsync();

@@ -198,6 +198,10 @@ public class ConsolidacionService : IConsolidacionService
             foreach (var a in maestro.Areas.Where(a => !string.IsNullOrWhiteSpace(a.CeBe)))
                 areaDict.TryAdd(a.CeBe.Trim(), a.Area.Trim());
 
+            var responsableDict = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var r in maestro.Responsables.Where(r => !string.IsNullOrWhiteSpace(r.WBS)))
+                responsableDict.TryAdd(r.WBS.Trim(), r.Nombre.Trim());
+
             // ── Agregar GR55 → IngresoReal / CostoReal ───────────────────────
             var gr55Agg = new Dictionary<ClaveProyecto, Gr55Bucket>();
 
@@ -252,6 +256,17 @@ public class ConsolidacionService : IConsolidacionService
             foreach (var (año, mes) in periodosSinTasa.OrderBy(x => x.Año).ThenBy(x => x.Mes))
                 warnings.Add($"Planeación {año}/{mes:D2}: sin tasa TDC — se usó última tasa disponible ({ultimaTasaCop:F2}) como proxy.");
 
+            // Índice de metadatos por proyecto (sin importar período) para rellenar
+            // entidades cuya clave no tiene PlanBucket (bug 149: GR55/Horas sin Planeación en ese año).
+            // Se prefiere el período más reciente para obtener el dato más actualizado.
+            var planMeta = planAgg
+                .GroupBy(kv => kv.Key.CodProyecto, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(
+                    g => g.Key,
+                    g => g.OrderByDescending(kv => kv.Key.Año).ThenByDescending(kv => kv.Key.Mes)
+                          .First().Value,
+                    StringComparer.OrdinalIgnoreCase);
+
             // ── Agregar Horas por (Proyecto, Año, Mes) ───────────────────────
             var horasAgg = new Dictionary<ClaveProyecto, decimal>();
 
@@ -278,6 +293,10 @@ public class ConsolidacionService : IConsolidacionService
                     planAgg.TryGetValue(clave, out var p);
                     horasAgg.TryGetValue(clave, out var horas);
 
+                    // Bug 149: si no hay PlanBucket para este período exacto, usar los
+                    // metadatos del período más reciente disponible del mismo proyecto.
+                    var meta = p ?? (planMeta.TryGetValue(clave.CodProyecto, out var m) ? m : null);
+
                     var rawSoc = g?.SocReceptora ?? string.Empty;
                     sociedadDict.TryGetValue(rawSoc, out var socRef);
                     var sociedad = socRef?.RazonSocial ?? rawSoc;
@@ -285,18 +304,23 @@ public class ConsolidacionService : IConsolidacionService
 
                     var rawCebe = !string.IsNullOrWhiteSpace(g?.CentroBeneficio)
                         ? g.CentroBeneficio
-                        : p?.Cebe ?? string.Empty;
+                        : meta?.Cebe ?? string.Empty;
 
                     var cebeNombre = rawCebe;
                     if (!string.IsNullOrWhiteSpace(rawCebe) && cebeDict.TryGetValue(rawCebe, out var cebeRef))
                         cebeNombre = cebeRef.Nombre;
 
-                    var industria = p?.Industria ?? string.Empty;
+                    var industria = meta?.Industria ?? string.Empty;
                     var vertical  = industriaDict.TryGetValue(industria, out var vNombre) ? vNombre : industria;
 
                     var area = string.Empty;
                     if (!string.IsNullOrWhiteSpace(rawCebe))
                         areaDict.TryGetValue(rawCebe, out area!);
+
+                    var rawResponsable = meta?.Responsable ?? string.Empty;
+                    var responsableNombre = responsableDict.TryGetValue(rawResponsable.Trim(), out var rNombre)
+                        ? rNombre
+                        : rawResponsable;
 
                     proyectos.Add(new Proyecto
                     {
@@ -304,10 +328,10 @@ public class ConsolidacionService : IConsolidacionService
                         CodProyecto      = clave.CodProyecto,
                         Año              = clave.Año,
                         Mes              = clave.Mes,
-                        IngresoReal      = g?.IngresoReal      ?? 0m,
-                        CostoReal        = g?.CostoReal        ?? 0m,
-                        IngresoPlaneado  = p?.IngresoPlaneado  ?? 0m,
-                        CostoPlaneado    = p?.CostoPlaneado    ?? 0m,
+                        IngresoReal      = g?.IngresoReal     ?? 0m,
+                        CostoReal        = g?.CostoReal       ?? 0m,
+                        IngresoPlaneado  = p?.IngresoPlaneado ?? 0m,
+                        CostoPlaneado    = p?.CostoPlaneado   ?? 0m,
                         Horas            = horas,
                         Sociedad         = sociedad,
                         Pais             = pais,
@@ -315,8 +339,8 @@ public class ConsolidacionService : IConsolidacionService
                         Industria        = industria,
                         Vertical         = vertical ?? string.Empty,
                         Area             = area ?? string.Empty,
-                        Cliente          = LimpiarHtml(p?.Cliente),
-                        Responsable      = LimpiarHtml(p?.Responsable),
+                        Cliente          = LimpiarHtml(meta?.Cliente),
+                        Responsable      = LimpiarHtml(responsableNombre),
                     });
 
                     exitosos++;

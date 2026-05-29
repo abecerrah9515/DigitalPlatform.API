@@ -25,6 +25,7 @@ public class MaestroReferenciasParser : IMaestroReferenciasParser
         dto.AccountsGroups = ParseSheet(archivo, sheetNames, "Accounts_Group",  ParseAccountsGroup, ref totalFilas, onProgress);
         dto.Verticales     = ParseSheet(archivo, sheetNames, "Verticales",      ParseVertical,      ref totalFilas, onProgress);
         dto.Areas          = ParseSheet(archivo, sheetNames, "Area",            ParseArea,          ref totalFilas, onProgress);
+        dto.Responsables   = ParseSheet(archivo, sheetNames, "Responsable",     ParseResponsable,   ref totalFilas, onProgress);
 
         return Task.FromResult(dto);
     }
@@ -151,5 +152,21 @@ public class MaestroReferenciasParser : IMaestroReferenciasParser
         var cebe    = cebeRaw.Split('-')[0].Trim();
 
         return new AreaReferenciaDto { Area = area, CeBe = cebe };
+    }
+
+    private ResponsableReferenciaDto? ParseResponsable(Dictionary<string, object?> row)
+    {
+        // Columna clave: "responsable_wbs" (mismo nombre que en Planeacion.xlsx)
+        var wbs = ExcelParserHelper.GetString(row, "responsable_wbs");
+        if (string.IsNullOrWhiteSpace(wbs)) return null;
+
+        // Nombre completo: busca "nombre_responsable", "nombre_completo" o "nombre"
+        var nombreKey = row.Keys.FirstOrDefault(k =>
+            k.Contains("nombre", StringComparison.OrdinalIgnoreCase));
+        var nombre = nombreKey is not null
+            ? ExcelParserHelper.GetString(row, nombreKey)
+            : string.Empty;
+
+        return new ResponsableReferenciaDto { WBS = wbs, Nombre = nombre };
     }
 }

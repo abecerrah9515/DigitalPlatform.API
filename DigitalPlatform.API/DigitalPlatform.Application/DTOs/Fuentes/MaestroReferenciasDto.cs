@@ -9,6 +9,7 @@ public class MaestroReferenciasDto
     public List<AccountsGroupReferenciaDto> AccountsGroups { get; set; } = [];
     public List<VerticalReferenciaDto>      Verticales     { get; set; } = [];
     public List<AreaReferenciaDto>          Areas          { get; set; } = [];
+    public List<ResponsableReferenciaDto>   Responsables   { get; set; } = [];
 }
 
 public class IndustriaReferenciaDto
@@ -54,4 +55,10 @@ public class AreaReferenciaDto
 {
     public string Area { get; set; } = string.Empty;
     public string CeBe { get; set; } = string.Empty;
+}
+
+public class ResponsableReferenciaDto
+{
+    public string WBS    { get; set; } = string.Empty;
+    public string Nombre { get; set; } = string.Empty;
 }
