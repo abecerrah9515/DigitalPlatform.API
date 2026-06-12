@@ -3,6 +3,7 @@ using System;
 using DigitalPlatform.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace DigitalPlatform.Infrastructure.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260611231710_ExpandControlFacturaColumns")]
+    partial class ExpandControlFacturaColumns
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -30,18 +33,18 @@ namespace DigitalPlatform.Infrastructure.Migrations
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
 
-                    b.Property<string>("Addenda")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("CampoClasificacion")
-                        .IsRequired()
-                        .HasColumnType("text");
-
                     b.Property<int>("CargaArchivoId")
                         .HasColumnType("integer");
 
-                    b.Property<string>("ClaseImpuesto")
+                    b.Property<string>("Ciudad")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("CodigoPostal")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("CondicionesPago")
                         .IsRequired()
                         .HasColumnType("text");
 
@@ -69,42 +72,19 @@ namespace DigitalPlatform.Infrastructure.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
-                    b.Property<string>("CorreoElectronico")
+                    b.Property<string>("Direccion")
                         .IsRequired()
                         .HasColumnType("text");
 
-                    b.Property<DateTime?>("FechaModificacion")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("GpoClientes")
+                    b.Property<string>("Email")
                         .IsRequired()
                         .HasColumnType("text");
 
-                    b.Property<string>("GrupoCuenta")
+                    b.Property<string>("Grupo")
                         .IsRequired()
                         .HasColumnType("text");
 
-                    b.Property<string>("IdAddenda")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("IdClaseImpuesto")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("IdGrupoClientes")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("IdPais")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("IdTipoNif")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("ModificadoPor")
+                    b.Property<string>("Nit")
                         .IsRequired()
                         .HasColumnType("text");
 
@@ -112,27 +92,15 @@ namespace DigitalPlatform.Infrastructure.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
-                    b.Property<string>("NumeroCliente")
-                        .IsRequired()
-                        .HasColumnType("text");
-
                     b.Property<string>("Pais")
                         .IsRequired()
                         .HasColumnType("text");
 
-                    b.Property<string>("PersonaFisica")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("Poblacion")
+                    b.Property<string>("Region")
                         .IsRequired()
                         .HasColumnType("text");
 
                     b.Property<string>("Telefono")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("TipoNif")
                         .IsRequired()
                         .HasColumnType("text");
 
@@ -523,24 +491,12 @@ namespace DigitalPlatform.Infrastructure.Migrations
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
 
-                    b.Property<string>("AcuerdoPago")
-                        .IsRequired()
-                        .HasColumnType("text");
-
                     b.Property<string>("Asignacion")
                         .IsRequired()
                         .HasColumnType("text");
 
                     b.Property<int>("CargaArchivoId")
                         .HasColumnType("integer");
-
-                    b.Property<string>("Comentario")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("CuentaMayor")
-                        .IsRequired()
-                        .HasColumnType("text");
 
                     b.Property<int>("DemoraDPP1")
                         .HasColumnType("integer");
@@ -553,11 +509,7 @@ namespace DigitalPlatform.Infrastructure.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
-                    b.Property<string>("FechaCompromiso")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<DateTime?>("FechaContabiliz")
+                    b.Property<DateTime?>("FechaCompromiso")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<DateTime?>("FechaDocumento")
@@ -565,13 +517,6 @@ namespace DigitalPlatform.Infrastructure.Migrations
 
                     b.Property<DateTime?>("FechaPago")
                         .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTime?>("FechaPagoReal")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<decimal>("ImporteMonedaDoc")
-                        .HasPrecision(18, 2)
-                        .HasColumnType("numeric(18,2)");
 
                     b.Property<decimal>("ImporteMonedaLocal")
                         .HasPrecision(18, 2)
@@ -586,14 +531,6 @@ namespace DigitalPlatform.Infrastructure.Migrations
                         .HasColumnType("text");
 
                     b.Property<string>("Referencia")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("Responsable")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("Semana")
                         .IsRequired()
                         .HasColumnType("text");
 

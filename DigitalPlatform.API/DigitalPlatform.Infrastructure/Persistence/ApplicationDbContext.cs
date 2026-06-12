@@ -13,6 +13,10 @@ public class ApplicationDbContext : DbContext
     public DbSet<Sociedad> Sociedades => Set<Sociedad>();
     public DbSet<CeBe> CeBes => Set<CeBe>();
     public DbSet<Industria> Industrias => Set<Industria>();
+    public DbSet<CargaArchivo> CargasArchivo => Set<CargaArchivo>();
+    public DbSet<BaseCliente> BaseClientes => Set<BaseCliente>();
+    public DbSet<ControlFactura> ControlFacturas => Set<ControlFactura>();
+    public DbSet<ReporteCarteraFactura> ReporteCarteraFacturas => Set<ReporteCarteraFactura>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -83,6 +87,63 @@ public class ApplicationDbContext : DbContext
             entity.HasKey(e => e.Id);
             entity.Property(e => e.CodIndustria).HasMaxLength(20);
             entity.Property(e => e.Vertical).HasMaxLength(100);
+        });
+
+        modelBuilder.Entity<CargaArchivo>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Tipo).HasMaxLength(50).IsRequired();
+            entity.Property(e => e.NombreArchivo).HasMaxLength(255);
+            entity.Property(e => e.FechaCarga).IsRequired();
+            entity.Property(e => e.RutaArchivo).HasMaxLength(500);
+        });
+
+        modelBuilder.Entity<BaseCliente>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.HasOne(e => e.CargaArchivo)
+                  .WithMany()
+                  .HasForeignKey(e => e.CargaArchivoId)
+                  .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<ControlFactura>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Valor).HasPrecision(18, 2);
+            entity.Property(e => e.Iva).HasPrecision(18, 2);
+            entity.Property(e => e.ReteIva).HasPrecision(18, 2);
+            entity.Property(e => e.Autorenta).HasPrecision(18, 2);
+            entity.Property(e => e.Retencion).HasPrecision(18, 2);
+            entity.Property(e => e.Ica).HasPrecision(18, 2);
+            entity.Property(e => e.Total).HasPrecision(18, 2);
+            entity.Property(e => e.Trm).HasPrecision(18, 2);
+            entity.Property(e => e.ValorUsd).HasPrecision(18, 2);
+            entity.Property(e => e.ValorAnulacion).HasPrecision(18, 2);
+            entity.Property(e => e.ValorCancelar).HasPrecision(18, 2);
+            entity.HasOne(e => e.CargaArchivo)
+                  .WithMany()
+                  .HasForeignKey(e => e.CargaArchivoId)
+                  .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<ReporteCarteraFactura>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.ValorRecibir).HasPrecision(18, 2);
+            entity.Property(e => e.ImporteMonedaLocal).HasPrecision(18, 2);
+            entity.Property(e => e.ImporteMonedaDoc).HasPrecision(18, 2);
+            entity.Property(e => e.VencidoEnTiempo).HasPrecision(18, 2);
+            entity.Property(e => e.Vencido0_15).HasPrecision(18, 2);
+            entity.Property(e => e.Vencido16_30).HasPrecision(18, 2);
+            entity.Property(e => e.Vencido31_60).HasPrecision(18, 2);
+            entity.Property(e => e.Vencido61_90).HasPrecision(18, 2);
+            entity.Property(e => e.Vencido91_120).HasPrecision(18, 2);
+            entity.Property(e => e.Vencido121_365).HasPrecision(18, 2);
+            entity.HasOne(e => e.CargaArchivo)
+                  .WithMany()
+                  .HasForeignKey(e => e.CargaArchivoId)
+                  .OnDelete(DeleteBehavior.Cascade);
         });
     }
 }

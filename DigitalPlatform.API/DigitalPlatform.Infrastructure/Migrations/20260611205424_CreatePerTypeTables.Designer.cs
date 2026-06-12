@@ -3,6 +3,7 @@ using System;
 using DigitalPlatform.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace DigitalPlatform.Infrastructure.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260611205424_CreatePerTypeTables")]
+    partial class CreatePerTypeTables
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -30,20 +33,23 @@ namespace DigitalPlatform.Infrastructure.Migrations
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
 
-                    b.Property<string>("Addenda")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("CampoClasificacion")
-                        .IsRequired()
-                        .HasColumnType("text");
-
                     b.Property<int>("CargaArchivoId")
                         .HasColumnType("integer");
 
-                    b.Property<string>("ClaseImpuesto")
+                    b.Property<string>("Ciudad")
                         .IsRequired()
-                        .HasColumnType("text");
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("CodigoPostal")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<string>("CondicionesPago")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
 
                     b.Property<string>("ContactoComercial")
                         .IsRequired()
@@ -69,72 +75,45 @@ namespace DigitalPlatform.Infrastructure.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
-                    b.Property<string>("CorreoElectronico")
+                    b.Property<string>("Direccion")
                         .IsRequired()
-                        .HasColumnType("text");
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
 
-                    b.Property<DateTime?>("FechaModificacion")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("GpoClientes")
+                    b.Property<string>("Email")
                         .IsRequired()
-                        .HasColumnType("text");
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)");
 
-                    b.Property<string>("GrupoCuenta")
+                    b.Property<string>("Grupo")
                         .IsRequired()
-                        .HasColumnType("text");
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
 
-                    b.Property<string>("IdAddenda")
+                    b.Property<string>("Nit")
                         .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("IdClaseImpuesto")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("IdGrupoClientes")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("IdPais")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("IdTipoNif")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("ModificadoPor")
-                        .IsRequired()
-                        .HasColumnType("text");
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
 
                     b.Property<string>("Nombre")
                         .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("NumeroCliente")
-                        .IsRequired()
-                        .HasColumnType("text");
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
 
                     b.Property<string>("Pais")
                         .IsRequired()
-                        .HasColumnType("text");
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
 
-                    b.Property<string>("PersonaFisica")
+                    b.Property<string>("Region")
                         .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("Poblacion")
-                        .IsRequired()
-                        .HasColumnType("text");
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
 
                     b.Property<string>("Telefono")
                         .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("TipoNif")
-                        .IsRequired()
-                        .HasColumnType("text");
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
 
                     b.HasKey("Id");
 
@@ -255,144 +234,31 @@ namespace DigitalPlatform.Infrastructure.Migrations
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
 
-                    b.Property<string>("ActaNumero")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<decimal>("Autorenta")
-                        .HasPrecision(18, 2)
-                        .HasColumnType("numeric(18,2)");
-
                     b.Property<int>("CargaArchivoId")
                         .HasColumnType("integer");
 
                     b.Property<string>("Cliente")
                         .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("Compensacion")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("Concepto")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("DatosAdicionales")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<DateTime?>("DiaTrm")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("EntradaMercancia")
-                        .IsRequired()
-                        .HasColumnType("text");
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
 
                     b.Property<string>("Estado")
                         .IsRequired()
-                        .HasColumnType("text");
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
 
-                    b.Property<DateTime?>("FechaEmision")
+                    b.Property<string>("Factura")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<DateTime>("FechaEmision")
                         .HasColumnType("timestamp with time zone");
 
-                    b.Property<DateTime?>("FechaEnvio")
+                    b.Property<DateTime>("FechaVencimiento")
                         .HasColumnType("timestamp with time zone");
 
-                    b.Property<DateTime?>("FechaPago")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTime?>("FechaSolicito")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTime?>("FechaSolicitud")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<decimal>("Ica")
-                        .HasPrecision(18, 2)
-                        .HasColumnType("numeric(18,2)");
-
-                    b.Property<decimal>("Iva")
-                        .HasPrecision(18, 2)
-                        .HasColumnType("numeric(18,2)");
-
-                    b.Property<string>("NotaCredito")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("NumeroCliente")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("NumeroDocumento")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("NumeroDocumento2")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("NumeroSeguimiento")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("Observaciones")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("OrdenConsecutivo")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("OrdenPedido")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("Pep")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("RazonAnulacion")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("Reemplazo")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<decimal>("ReteIva")
-                        .HasPrecision(18, 2)
-                        .HasColumnType("numeric(18,2)");
-
-                    b.Property<decimal>("Retencion")
-                        .HasPrecision(18, 2)
-                        .HasColumnType("numeric(18,2)");
-
-                    b.Property<string>("ServicioProducto")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<decimal>("Total")
-                        .HasPrecision(18, 2)
-                        .HasColumnType("numeric(18,2)");
-
-                    b.Property<decimal>("Trm")
-                        .HasPrecision(18, 2)
-                        .HasColumnType("numeric(18,2)");
-
-                    b.Property<decimal>("Valor")
-                        .HasPrecision(18, 2)
-                        .HasColumnType("numeric(18,2)");
-
-                    b.Property<decimal>("ValorAnulacion")
-                        .HasPrecision(18, 2)
-                        .HasColumnType("numeric(18,2)");
-
-                    b.Property<decimal>("ValorCancelar")
-                        .HasPrecision(18, 2)
-                        .HasColumnType("numeric(18,2)");
-
-                    b.Property<decimal>("ValorUsd")
+                    b.Property<decimal>("Monto")
                         .HasPrecision(18, 2)
                         .HasColumnType("numeric(18,2)");
 
@@ -523,41 +389,28 @@ namespace DigitalPlatform.Infrastructure.Migrations
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
 
-                    b.Property<string>("AcuerdoPago")
-                        .IsRequired()
-                        .HasColumnType("text");
-
                     b.Property<string>("Asignacion")
                         .IsRequired()
-                        .HasColumnType("text");
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
 
                     b.Property<int>("CargaArchivoId")
                         .HasColumnType("integer");
-
-                    b.Property<string>("Comentario")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("CuentaMayor")
-                        .IsRequired()
-                        .HasColumnType("text");
 
                     b.Property<int>("DemoraDPP1")
                         .HasColumnType("integer");
 
                     b.Property<string>("Deudor")
                         .IsRequired()
-                        .HasColumnType("text");
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
 
                     b.Property<string>("Estado")
                         .IsRequired()
-                        .HasColumnType("text");
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
 
-                    b.Property<string>("FechaCompromiso")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<DateTime?>("FechaContabiliz")
+                    b.Property<DateTime?>("FechaCompromiso")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<DateTime?>("FechaDocumento")
@@ -566,46 +419,30 @@ namespace DigitalPlatform.Infrastructure.Migrations
                     b.Property<DateTime?>("FechaPago")
                         .HasColumnType("timestamp with time zone");
 
-                    b.Property<DateTime?>("FechaPagoReal")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<decimal>("ImporteMonedaDoc")
-                        .HasPrecision(18, 2)
-                        .HasColumnType("numeric(18,2)");
-
                     b.Property<decimal>("ImporteMonedaLocal")
                         .HasPrecision(18, 2)
                         .HasColumnType("numeric(18,2)");
 
                     b.Property<string>("MonedaDocumento")
                         .IsRequired()
-                        .HasColumnType("text");
+                        .HasMaxLength(10)
+                        .HasColumnType("character varying(10)");
 
                     b.Property<string>("RazonSocial")
                         .IsRequired()
-                        .HasColumnType("text");
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
 
                     b.Property<string>("Referencia")
                         .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("Responsable")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("Semana")
-                        .IsRequired()
-                        .HasColumnType("text");
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
 
                     b.Property<decimal>("ValorRecibir")
                         .HasPrecision(18, 2)
                         .HasColumnType("numeric(18,2)");
 
                     b.Property<decimal>("Vencido0_15")
-                        .HasPrecision(18, 2)
-                        .HasColumnType("numeric(18,2)");
-
-                    b.Property<decimal>("Vencido121_365")
                         .HasPrecision(18, 2)
                         .HasColumnType("numeric(18,2)");
 
