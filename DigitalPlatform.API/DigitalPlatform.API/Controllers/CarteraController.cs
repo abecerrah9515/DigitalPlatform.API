@@ -136,7 +136,7 @@ public class CarteraController : ControllerBase
         if (body.TryGetProperty("nuevaFechaCompromiso", out var fechaProp) && fechaProp.ValueKind == JsonValueKind.String)
         {
             if (DateTime.TryParse(fechaProp.GetString(), out var dt))
-                nuevaFecha = dt;
+                nuevaFecha = DateTime.SpecifyKind(dt, DateTimeKind.Utc);
         }
         var resultado = await _carteraService.AgregarComentarioAsync(facturaId, texto, nuevaFecha);
         return Ok(resultado);
@@ -147,6 +147,14 @@ public class CarteraController : ControllerBase
     public async Task<ActionResult<ApiResponse<List<ComentarioDto>>>> GetComentarios(int facturaId)
     {
         var resultado = await _carteraService.GetComentariosAsync(facturaId);
+        return Ok(resultado);
+    }
+
+    // GET api/cartera/tasa-cambio?moneda=USD
+    [HttpGet("tasa-cambio")]
+    public async Task<ActionResult<ApiResponse<TasaCambioDto>>> GetTasaCambio([FromQuery] string moneda = "USD")
+    {
+        var resultado = await _carteraService.GetTasaCambioAsync(moneda);
         return Ok(resultado);
     }
 
@@ -196,6 +204,22 @@ public class CarteraController : ControllerBase
     public async Task<ActionResult<ApiResponse<ContactoClienteDto>>> AgregarContacto(int id, [FromBody] ContactoClienteDto contacto)
     {
         var resultado = await _carteraService.AgregarContactoAsync(id, contacto);
+        return Ok(resultado);
+    }
+
+    // PUT api/cartera/clientes/{id}/contactos/{contactoId}
+    [HttpPut("clientes/{id}/contactos/{contactoId}")]
+    public async Task<ActionResult<ApiResponse<ContactoClienteDto>>> ActualizarContacto(int id, int contactoId, [FromBody] ContactoClienteDto contacto)
+    {
+        var resultado = await _carteraService.ActualizarContactoAsync(id, contactoId, contacto);
+        return Ok(resultado);
+    }
+
+    // DELETE api/cartera/clientes/{id}/contactos/{contactoId}
+    [HttpDelete("clientes/{id}/contactos/{contactoId}")]
+    public async Task<ActionResult<ApiResponse<string>>> EliminarContacto(int id, int contactoId)
+    {
+        var resultado = await _carteraService.EliminarContactoAsync(id, contactoId);
         return Ok(resultado);
     }
 

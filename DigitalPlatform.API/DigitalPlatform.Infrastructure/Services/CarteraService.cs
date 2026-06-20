@@ -446,8 +446,8 @@ public class CarteraService : ICarteraService
             var bases = await _db.BaseClientes.Where(b => b.CargaArchivoId == baseCargaId).ToListAsync();
             foreach (var b in bases)
             {
-                if (!string.IsNullOrWhiteSpace(b.NumeroCliente) && !clienteLookup.ContainsKey(b.NumeroCliente))
-                    clienteLookup[b.NumeroCliente] = b.Nombre;
+                if (!string.IsNullOrWhiteSpace(b.NumeroCuenta) && !clienteLookup.ContainsKey(b.NumeroCuenta))
+                    clienteLookup[b.NumeroCuenta] = b.NombreCliente;
             }
         }
 
@@ -616,47 +616,114 @@ public class CarteraService : ICarteraService
         return ApiResponse<byte[]>.Ok(stream.ToArray());
     }
 
-    public Task<ApiResponse<ComentarioDto>> AgregarComentarioAsync(int facturaId, string texto, DateTime? nuevaFechaCompromiso = null)
+    public async Task<ApiResponse<ComentarioDto>> AgregarComentarioAsync(int facturaId, string texto, DateTime? nuevaFechaCompromiso = null)
     {
-        _logger.LogInformation("Comentario agregado a factura {FacturaId}: {Texto}", facturaId, texto);
-        return Task.FromResult(ApiResponse<ComentarioDto>.Ok(new ComentarioDto
+        var cargaId = await UltimaCargaIdAsync("reporte-cartera");
+        if (cargaId is null)
         {
-            Id = _rng.Next(100, 9999),
+            _logger.LogWarning("No hay carga activa de tipo reporte-cartera, se retorna mock");
+            return ApiResponse<ComentarioDto>.Ok(new ComentarioDto
+            {
+                Id = _rng.Next(100, 9999),
+                Autor = "Usuario",
+                Fecha = DateTime.Now,
+                Texto = texto,
+                NuevaFechaCompromiso = nuevaFechaCompromiso,
+            });
+        }
+
+        var entity = new ComentarioFactura
+        {
+            CargaArchivoId = cargaId.Value,
+            FacturaId = facturaId,
             Autor = "Usuario",
-            Fecha = DateTime.Now,
+            Fecha = DateTime.UtcNow,
             Texto = texto,
             NuevaFechaCompromiso = nuevaFechaCompromiso,
-        }));
+        };
+
+        _db.ComentariosFacturas.Add(entity);
+        try
+        {
+            await _db.SaveChangesAsync();
+        }
+        catch (DbUpdateException ex)
+        {
+            _logger.LogError(ex, "Error al guardar comentario en BD: {Message} | Inner: {Inner}",
+                ex.Message, ex.InnerException?.Message);
+            return ApiResponse<ComentarioDto>.Fail(
+                $"Error al guardar en base de datos: {ex.InnerException?.Message ?? ex.Message}");
+        }
+
+        _logger.LogInformation("Comentario {ComentarioId} agregado a factura {FacturaId}", entity.Id, facturaId);
+
+        return ApiResponse<ComentarioDto>.Ok(new ComentarioDto
+        {
+            Id = entity.Id,
+            Autor = entity.Autor,
+            Fecha = entity.Fecha,
+            Texto = entity.Texto,
+            NuevaFechaCompromiso = entity.NuevaFechaCompromiso,
+        });
     }
 
-    public Task<ApiResponse<List<ComentarioDto>>> GetComentariosAsync(int facturaId)
+    public async Task<ApiResponse<List<ComentarioDto>>> GetComentariosAsync(int facturaId)
     {
-        var comentarios = new List<ComentarioDto>
+        var cargaId = await UltimaCargaIdAsync("reporte-cartera");
+        if (cargaId is null)
         {
-            new() { Id = 1, Autor = "Sistema", Fecha = DateTime.Now.AddDays(-10), Texto = "Factura creada." },
-            new() { Id = 2, Autor = "Usuario", Fecha = DateTime.Now.AddDays(-5), Texto = "Se solicitó confirmación de pago al cliente." },
-            new() { Id = 3, Autor = "Usuario", Fecha = DateTime.Now.AddDays(-1), Texto = "Cliente confirmó pago para la próxima semana.", NuevaFechaCompromiso = DateTime.Now.AddDays(7) },
-        };
-        return Task.FromResult(ApiResponse<List<ComentarioDto>>.Ok(comentarios));
+            var comentarios = new List<ComentarioDto>
+            {
+                new() { Id = 1, Autor = "Sistema", Fecha = DateTime.Now.AddDays(-10), Texto = "Factura creada." },
+                new() { Id = 2, Autor = "Usuario", Fecha = DateTime.Now.AddDays(-5), Texto = "Se solicitó confirmación de pago al cliente." },
+                new() { Id = 3, Autor = "Usuario", Fecha = DateTime.Now.AddDays(-1), Texto = "Cliente confirmó pago para la próxima semana.", NuevaFechaCompromiso = DateTime.Now.AddDays(7) },
+            };
+            return ApiResponse<List<ComentarioDto>>.Ok(comentarios);
+        }
+
+        var entities = await _db.ComentariosFacturas
+            .Where(c => c.CargaArchivoId == cargaId && c.FacturaId == facturaId)
+            .OrderByDescending(c => c.Fecha)
+            .ToListAsync();
+
+        var result = entities.Select(e => new ComentarioDto
+        {
+            Id = e.Id,
+            Autor = e.Autor,
+            Fecha = e.Fecha,
+            Texto = e.Texto,
+            NuevaFechaCompromiso = e.NuevaFechaCompromiso,
+        }).ToList();
+
+        return ApiResponse<List<ComentarioDto>>.Ok(result);
+    }
+
+    public async Task<ApiResponse<TasaCambioDto>> GetTasaCambioAsync(string moneda = "USD")
+    {
+        var mon = moneda.ToUpperInvariant();
+        var ultimo = await _db.TiposCambio
+            .Where(t => t.Moneda == mon)
+            .OrderByDescending(t => t.Año)
+            .ThenByDescending(t => t.Mes)
+            .FirstOrDefaultAsync();
+
+        if (ultimo is null)
+        {
+            var tasaDefault = mon switch
+            {
+                "USD" => 4200m,
+                "EUR" => 4600m,
+                _ => 1m,
+            };
+            return ApiResponse<TasaCambioDto>.Ok(new TasaCambioDto { Moneda = mon, Tasa = tasaDefault });
+        }
+
+        return ApiResponse<TasaCambioDto>.Ok(new TasaCambioDto { Moneda = ultimo.Moneda, Tasa = ultimo.Tasa });
     }
 
     public Task<ApiResponse<List<NotificacionEnviadaDto>>> GetNotificacionesEnviadasAsync(string? estado = null, string? cliente = null)
     {
-        var tipos = new[] { "Recordatorio", "Alerta Vencimiento", "Confirmación Pago" };
-        var mock = MockFacturas();
-        var notis = Enumerable.Range(1, 15).Select(i =>
-        {
-            var f = mock[i % mock.Count];
-            return new NotificacionEnviadaDto
-            {
-                Id = i,
-                Factura = f.Factura,
-                Cliente = f.Cliente,
-                FechaEnvio = DateTime.Now.AddDays(-_rng.Next(1, 30)),
-                Tipo = tipos[_rng.Next(tipos.Length)],
-                Estado = _rng.Next(2) == 0 ? "Enviado" : "Pendiente",
-            };
-        }).ToList();
+        var notis = new List<NotificacionEnviadaDto>();
 
         if (!string.IsNullOrWhiteSpace(estado))
             notis = notis.Where(n => n.Estado.Equals(estado, StringComparison.OrdinalIgnoreCase)).ToList();
@@ -683,7 +750,7 @@ public class CarteraService : ICarteraService
         }
         else
         {
-            var rows = await _db.BaseClientes.Where(r => r.CargaArchivoId == cargaId).ToListAsync();
+            var rows = await _db.BaseClientes.Include(r => r.Contactos).Where(r => r.CargaArchivoId == cargaId).ToListAsync();
             clientes = rows.Select((r, i) => MapEntityToClienteDetalle(r, i + 1))
                 .Where(c => !string.IsNullOrWhiteSpace(c.Nombre))
                 .ToList();
@@ -696,21 +763,21 @@ public class CarteraService : ICarteraService
         return ApiResponse<List<ClienteDetalleDto>>.Ok(clientes);
     }
 
-    private static ClienteDetalleDto MapEntityToClienteDetalle(BaseCliente e, int id)
+    private ClienteDetalleDto MapEntityToClienteDetalle(BaseCliente e, int id)
     {
         return new ClienteDetalleDto
         {
             Id = id,
-            Nombre = e.Nombre,
-            Nit = e.NumeroCliente,
+            Nombre = e.NombreCliente,
+            Nit = e.NumeroCuenta,
             Grupo = e.GrupoCuenta,
-            Direccion = "",
-            Ciudad = e.Poblacion,
+            Direccion = e.Calle,
+            Ciudad = "",
             Region = "",
             Pais = e.Pais,
             CodigoPostal = "",
             Telefono = e.Telefono,
-            EmailContabilidad = e.CorreoElectronico,
+            EmailContabilidad = e.CorreoContabilidad,
             CondicionesPago = "",
             ContactoContabilidad = e.ContactoContabilidad,
             ContactoTesoreria = e.ContactoTesoreria,
@@ -718,6 +785,15 @@ public class CarteraService : ICarteraService
             ContactoOperacion = e.ContactoOperacion,
             ContactoComercial = e.ContactoComercial,
             ContactoCompras = e.ContactoCompras,
+            Contactos = e.Contactos.Select(c => new ContactoClienteDto
+            {
+                Id = c.Id,
+                Nombre = c.Nombre,
+                Cargo = c.Cargo,
+                Departamento = c.Departamento,
+                Email = c.Email,
+                Telefono = c.Telefono,
+            }).ToList(),
         };
     }
 
@@ -733,7 +809,7 @@ public class CarteraService : ICarteraService
             return ApiResponse<ClienteDetalleDto>.Ok(mockCliente);
         }
 
-        var rows = await _db.BaseClientes.Where(r => r.CargaArchivoId == cargaId).ToListAsync();
+        var rows = await _db.BaseClientes.Include(r => r.Contactos).Where(r => r.CargaArchivoId == cargaId).ToListAsync();
         var clientes = rows.Select((r, i) => MapEntityToClienteDetalle(r, i + 1))
             .Where(c => !string.IsNullOrWhiteSpace(c.Nombre))
             .ToList();
@@ -757,11 +833,110 @@ public class CarteraService : ICarteraService
         }));
     }
 
-    public Task<ApiResponse<ContactoClienteDto>> AgregarContactoAsync(int clienteId, ContactoClienteDto contacto)
+    public async Task<ApiResponse<ContactoClienteDto>> AgregarContactoAsync(int clienteId, ContactoClienteDto contacto)
     {
-        _logger.LogInformation("Contacto agregado al cliente {ClienteId}: {Nombre}", clienteId, contacto.Nombre);
-        contacto.Id = _rng.Next(100, 9999);
-        return Task.FromResult(ApiResponse<ContactoClienteDto>.Ok(contacto));
+        var cargaId = await UltimaCargaIdAsync("base-clientes");
+        if (cargaId is null)
+            return ApiResponse<ContactoClienteDto>.Fail("No hay carga de base de clientes activa.");
+
+        var rows = await _db.BaseClientes.Where(r => r.CargaArchivoId == cargaId).ToListAsync();
+        if (clienteId < 1 || clienteId > rows.Count)
+            return ApiResponse<ContactoClienteDto>.Fail("Cliente no encontrado.");
+
+        var baseCliente = rows[clienteId - 1];
+        var entity = new ContactoCliente
+        {
+            BaseClienteId = baseCliente.Id,
+            Nombre = contacto.Nombre,
+            Cargo = contacto.Cargo ?? string.Empty,
+            Departamento = contacto.Departamento ?? string.Empty,
+            Email = contacto.Email,
+            Telefono = contacto.Telefono ?? string.Empty,
+        };
+
+        _db.ContactosClientes.Add(entity);
+        await _db.SaveChangesAsync();
+
+        _logger.LogInformation("Contacto {ContactoId} agregado al cliente {ClienteId}", entity.Id, clienteId);
+
+        return ApiResponse<ContactoClienteDto>.Ok(new ContactoClienteDto
+        {
+            Id = entity.Id,
+            Nombre = entity.Nombre,
+            Cargo = entity.Cargo,
+            Departamento = entity.Departamento,
+            Email = entity.Email,
+            Telefono = entity.Telefono,
+        });
+    }
+
+    public async Task<ApiResponse<ContactoClienteDto>> ActualizarContactoAsync(int clienteId, int contactoId, ContactoClienteDto contacto)
+    {
+        var cargaId = await UltimaCargaIdAsync("base-clientes");
+        if (cargaId is null)
+            return ApiResponse<ContactoClienteDto>.Fail("No hay carga de base de clientes activa.");
+
+        var baseIds = await _db.BaseClientes
+            .Where(r => r.CargaArchivoId == cargaId)
+            .Select(r => r.Id)
+            .ToListAsync();
+
+        if (clienteId < 1 || clienteId > baseIds.Count)
+            return ApiResponse<ContactoClienteDto>.Fail("Cliente no encontrado.");
+
+        var entity = await _db.ContactosClientes
+            .FirstOrDefaultAsync(c => c.Id == contactoId && c.BaseClienteId == baseIds[clienteId - 1]);
+
+        if (entity is null)
+            return ApiResponse<ContactoClienteDto>.Fail("Contacto no encontrado.");
+
+        entity.Nombre = contacto.Nombre;
+        entity.Cargo = contacto.Cargo ?? string.Empty;
+        entity.Departamento = contacto.Departamento ?? string.Empty;
+        entity.Email = contacto.Email;
+        entity.Telefono = contacto.Telefono ?? string.Empty;
+
+        await _db.SaveChangesAsync();
+
+        _logger.LogInformation("Contacto {ContactoId} actualizado", contactoId);
+
+        return ApiResponse<ContactoClienteDto>.Ok(new ContactoClienteDto
+        {
+            Id = entity.Id,
+            Nombre = entity.Nombre,
+            Cargo = entity.Cargo,
+            Departamento = entity.Departamento,
+            Email = entity.Email,
+            Telefono = entity.Telefono,
+        });
+    }
+
+    public async Task<ApiResponse<string>> EliminarContactoAsync(int clienteId, int contactoId)
+    {
+        var cargaId = await UltimaCargaIdAsync("base-clientes");
+        if (cargaId is null)
+            return ApiResponse<string>.Fail("No hay carga de base de clientes activa.");
+
+        var baseIds = await _db.BaseClientes
+            .Where(r => r.CargaArchivoId == cargaId)
+            .Select(r => r.Id)
+            .ToListAsync();
+
+        if (clienteId < 1 || clienteId > baseIds.Count)
+            return ApiResponse<string>.Fail("Cliente no encontrado.");
+
+        var entity = await _db.ContactosClientes
+            .FirstOrDefaultAsync(c => c.Id == contactoId && c.BaseClienteId == baseIds[clienteId - 1]);
+
+        if (entity is null)
+            return ApiResponse<string>.Fail("Contacto no encontrado.");
+
+        _db.ContactosClientes.Remove(entity);
+        await _db.SaveChangesAsync();
+
+        _logger.LogInformation("Contacto {ContactoId} eliminado", contactoId);
+
+        return ApiResponse<string>.Ok("Contacto eliminado correctamente.");
     }
 
     public Task<ApiResponse<SubProyectoResumenDto>> GetSubProyectosResumenAsync()

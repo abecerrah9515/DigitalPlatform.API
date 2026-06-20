@@ -17,6 +17,9 @@ public class ApplicationDbContext : DbContext
     public DbSet<BaseCliente> BaseClientes => Set<BaseCliente>();
     public DbSet<ControlFactura> ControlFacturas => Set<ControlFactura>();
     public DbSet<ReporteCarteraFactura> ReporteCarteraFacturas => Set<ReporteCarteraFactura>();
+    public DbSet<DepartamentoFinanzas> DepartamentosFinanzas => Set<DepartamentoFinanzas>();
+    public DbSet<ContactoCliente> ContactosClientes => Set<ContactoCliente>();
+    public DbSet<ComentarioFactura> ComentariosFacturas => Set<ComentarioFactura>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -127,7 +130,7 @@ public class ApplicationDbContext : DbContext
                   .OnDelete(DeleteBehavior.Cascade);
         });
 
-        modelBuilder.Entity<ReporteCarteraFactura>(entity =>
+            modelBuilder.Entity<ReporteCarteraFactura>(entity =>
         {
             entity.HasKey(e => e.Id);
             entity.Property(e => e.ValorRecibir).HasPrecision(18, 2);
@@ -144,6 +147,51 @@ public class ApplicationDbContext : DbContext
                   .WithMany()
                   .HasForeignKey(e => e.CargaArchivoId)
                   .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<DepartamentoFinanzas>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Nombre).HasMaxLength(100).IsRequired();
+            entity.HasIndex(e => e.Nombre).IsUnique();
+
+            entity.HasData(
+                new DepartamentoFinanzas { Id = 1, Nombre = "Gerencia" },
+                new DepartamentoFinanzas { Id = 2, Nombre = "Cartera" },
+                new DepartamentoFinanzas { Id = 3, Nombre = "IT" },
+                new DepartamentoFinanzas { Id = 4, Nombre = "Contabilidad" },
+                new DepartamentoFinanzas { Id = 5, Nombre = "Recursos Humanos" },
+                new DepartamentoFinanzas { Id = 6, Nombre = "Comercial" },
+                new DepartamentoFinanzas { Id = 7, Nombre = "Operaciones" },
+                new DepartamentoFinanzas { Id = 8, Nombre = "Otro" }
+            );
+        });
+
+        modelBuilder.Entity<ContactoCliente>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Nombre).HasMaxLength(200).IsRequired();
+            entity.Property(e => e.Cargo).HasMaxLength(200);
+            entity.Property(e => e.Departamento).HasMaxLength(100);
+            entity.Property(e => e.Email).HasMaxLength(300).IsRequired();
+            entity.Property(e => e.Telefono).HasMaxLength(50);
+            entity.HasOne(e => e.BaseCliente)
+                  .WithMany(b => b.Contactos)
+                  .HasForeignKey(e => e.BaseClienteId)
+                  .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<ComentarioFactura>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Autor).HasMaxLength(200).IsRequired();
+            entity.Property(e => e.Texto).IsRequired();
+            entity.Property(e => e.NuevaFechaCompromiso).HasColumnType("timestamp with time zone");
+            entity.HasOne(e => e.CargaArchivo)
+                  .WithMany()
+                  .HasForeignKey(e => e.CargaArchivoId)
+                  .OnDelete(DeleteBehavior.Cascade);
+            entity.HasIndex(e => new { e.CargaArchivoId, e.FacturaId });
         });
     }
 }

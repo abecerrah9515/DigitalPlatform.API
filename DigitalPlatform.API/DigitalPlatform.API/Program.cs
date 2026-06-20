@@ -24,6 +24,7 @@ builder.Services.AddScoped<IConsolidacionService, ConsolidacionService>();
 builder.Services.AddScoped<IProyectoService, ProyectoService>();
 builder.Services.AddScoped<ICarteraService, CarteraService>();
 builder.Services.AddScoped<ICargaArchivoService, CargaArchivoService>();
+builder.Services.AddScoped<IDepartamentoFinanzasService, DepartamentoFinanzasService>();
 
  
 // Permitir archivos grandes en uploads multipart (5 archivos, hasta ~512 MB en total)

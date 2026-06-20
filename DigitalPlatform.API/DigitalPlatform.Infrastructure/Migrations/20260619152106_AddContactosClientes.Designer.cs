@@ -3,6 +3,7 @@ using System;
 using DigitalPlatform.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace DigitalPlatform.Infrastructure.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260619152106_AddContactosClientes")]
+    partial class AddContactosClientes
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -163,42 +166,6 @@ namespace DigitalPlatform.Infrastructure.Migrations
                     b.HasKey("Id");
 
                     b.ToTable("CeBes");
-                });
-
-            modelBuilder.Entity("DigitalPlatform.Domain.Entities.ComentarioFactura", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<string>("Autor")
-                        .IsRequired()
-                        .HasMaxLength(200)
-                        .HasColumnType("character varying(200)");
-
-                    b.Property<int>("CargaArchivoId")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("FacturaId")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTime>("Fecha")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTime?>("NuevaFechaCompromiso")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("Texto")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("CargaArchivoId", "FacturaId");
-
-                    b.ToTable("ComentariosFacturas");
                 });
 
             modelBuilder.Entity("DigitalPlatform.Domain.Entities.ConsolidacionLog", b =>
@@ -799,17 +766,6 @@ namespace DigitalPlatform.Infrastructure.Migrations
                 });
 
             modelBuilder.Entity("DigitalPlatform.Domain.Entities.BaseCliente", b =>
-                {
-                    b.HasOne("DigitalPlatform.Domain.Entities.CargaArchivo", "CargaArchivo")
-                        .WithMany()
-                        .HasForeignKey("CargaArchivoId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("CargaArchivo");
-                });
-
-            modelBuilder.Entity("DigitalPlatform.Domain.Entities.ComentarioFactura", b =>
                 {
                     b.HasOne("DigitalPlatform.Domain.Entities.CargaArchivo", "CargaArchivo")
                         .WithMany()

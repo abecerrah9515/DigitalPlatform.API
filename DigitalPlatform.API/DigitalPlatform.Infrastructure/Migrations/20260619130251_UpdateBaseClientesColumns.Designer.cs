@@ -3,6 +3,7 @@ using System;
 using DigitalPlatform.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace DigitalPlatform.Infrastructure.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260619130251_UpdateBaseClientesColumns")]
+    partial class UpdateBaseClientesColumns
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -165,42 +168,6 @@ namespace DigitalPlatform.Infrastructure.Migrations
                     b.ToTable("CeBes");
                 });
 
-            modelBuilder.Entity("DigitalPlatform.Domain.Entities.ComentarioFactura", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<string>("Autor")
-                        .IsRequired()
-                        .HasMaxLength(200)
-                        .HasColumnType("character varying(200)");
-
-                    b.Property<int>("CargaArchivoId")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("FacturaId")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTime>("Fecha")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTime?>("NuevaFechaCompromiso")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("Texto")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("CargaArchivoId", "FacturaId");
-
-                    b.ToTable("ComentariosFacturas");
-                });
-
             modelBuilder.Entity("DigitalPlatform.Domain.Entities.ConsolidacionLog", b =>
                 {
                     b.Property<int>("Id")
@@ -242,49 +209,6 @@ namespace DigitalPlatform.Infrastructure.Migrations
                     b.HasKey("Id");
 
                     b.ToTable("ConsolidacionLogs");
-                });
-
-            modelBuilder.Entity("DigitalPlatform.Domain.Entities.ContactoCliente", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<int>("BaseClienteId")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("Cargo")
-                        .IsRequired()
-                        .HasMaxLength(200)
-                        .HasColumnType("character varying(200)");
-
-                    b.Property<string>("Departamento")
-                        .IsRequired()
-                        .HasMaxLength(100)
-                        .HasColumnType("character varying(100)");
-
-                    b.Property<string>("Email")
-                        .IsRequired()
-                        .HasMaxLength(300)
-                        .HasColumnType("character varying(300)");
-
-                    b.Property<string>("Nombre")
-                        .IsRequired()
-                        .HasMaxLength(200)
-                        .HasColumnType("character varying(200)");
-
-                    b.Property<string>("Telefono")
-                        .IsRequired()
-                        .HasMaxLength(50)
-                        .HasColumnType("character varying(50)");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("BaseClienteId");
-
-                    b.ToTable("ContactosClientes");
                 });
 
             modelBuilder.Entity("DigitalPlatform.Domain.Entities.ControlFactura", b =>
@@ -441,69 +365,6 @@ namespace DigitalPlatform.Infrastructure.Migrations
                     b.HasIndex("CargaArchivoId");
 
                     b.ToTable("ControlFacturas");
-                });
-
-            modelBuilder.Entity("DigitalPlatform.Domain.Entities.DepartamentoFinanzas", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<string>("Nombre")
-                        .IsRequired()
-                        .HasMaxLength(100)
-                        .HasColumnType("character varying(100)");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("Nombre")
-                        .IsUnique();
-
-                    b.ToTable("DepartamentosFinanzas");
-
-                    b.HasData(
-                        new
-                        {
-                            Id = 1,
-                            Nombre = "Gerencia"
-                        },
-                        new
-                        {
-                            Id = 2,
-                            Nombre = "Cartera"
-                        },
-                        new
-                        {
-                            Id = 3,
-                            Nombre = "IT"
-                        },
-                        new
-                        {
-                            Id = 4,
-                            Nombre = "Contabilidad"
-                        },
-                        new
-                        {
-                            Id = 5,
-                            Nombre = "Recursos Humanos"
-                        },
-                        new
-                        {
-                            Id = 6,
-                            Nombre = "Comercial"
-                        },
-                        new
-                        {
-                            Id = 7,
-                            Nombre = "Operaciones"
-                        },
-                        new
-                        {
-                            Id = 8,
-                            Nombre = "Otro"
-                        });
                 });
 
             modelBuilder.Entity("DigitalPlatform.Domain.Entities.Industria", b =>
@@ -809,28 +670,6 @@ namespace DigitalPlatform.Infrastructure.Migrations
                     b.Navigation("CargaArchivo");
                 });
 
-            modelBuilder.Entity("DigitalPlatform.Domain.Entities.ComentarioFactura", b =>
-                {
-                    b.HasOne("DigitalPlatform.Domain.Entities.CargaArchivo", "CargaArchivo")
-                        .WithMany()
-                        .HasForeignKey("CargaArchivoId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("CargaArchivo");
-                });
-
-            modelBuilder.Entity("DigitalPlatform.Domain.Entities.ContactoCliente", b =>
-                {
-                    b.HasOne("DigitalPlatform.Domain.Entities.BaseCliente", "BaseCliente")
-                        .WithMany("Contactos")
-                        .HasForeignKey("BaseClienteId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("BaseCliente");
-                });
-
             modelBuilder.Entity("DigitalPlatform.Domain.Entities.ControlFactura", b =>
                 {
                     b.HasOne("DigitalPlatform.Domain.Entities.CargaArchivo", "CargaArchivo")
@@ -862,11 +701,6 @@ namespace DigitalPlatform.Infrastructure.Migrations
                         .IsRequired();
 
                     b.Navigation("CargaArchivo");
-                });
-
-            modelBuilder.Entity("DigitalPlatform.Domain.Entities.BaseCliente", b =>
-                {
-                    b.Navigation("Contactos");
                 });
 
             modelBuilder.Entity("DigitalPlatform.Domain.Entities.ConsolidacionLog", b =>

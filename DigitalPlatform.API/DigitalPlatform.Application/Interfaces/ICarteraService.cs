@@ -25,6 +25,8 @@ public interface ICarteraService
     Task<ApiResponse<ClienteDetalleDto>> GetClienteByIdAsync(int id);
     Task<ApiResponse<NotaClienteDto>> AgregarNotaClienteAsync(int clienteId, string texto);
     Task<ApiResponse<ContactoClienteDto>> AgregarContactoAsync(int clienteId, ContactoClienteDto contacto);
+    Task<ApiResponse<ContactoClienteDto>> ActualizarContactoAsync(int clienteId, int contactoId, ContactoClienteDto contacto);
+    Task<ApiResponse<string>> EliminarContactoAsync(int clienteId, int contactoId);
     Task<ApiResponse<SubProyectoResumenDto>> GetSubProyectosResumenAsync();
     Task<ApiResponse<List<SubProyectoDto>>> GetSubProyectosListaAsync();
     Task<ApiResponse<List<DirectorioEmpresaDto>>> GetDirectorioEmpresaAsync(string empresa);
@@ -32,4 +34,5 @@ public interface ICarteraService
     Task<ApiResponse<string>> UploadDirectorioAsync(string empresa, Stream fileStream, string fileName);
     Task<ApiResponse<string>> EnviarNotificacionBRMAsync(NotificacionBRMDto notificacion);
     Task<ApiResponse<List<FechaReprogramadaDto>>> GetFechasReprogramadasAsync();
+    Task<ApiResponse<TasaCambioDto>> GetTasaCambioAsync(string moneda = "USD");
 }
