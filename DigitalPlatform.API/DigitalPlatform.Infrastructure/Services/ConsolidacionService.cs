@@ -191,6 +191,7 @@ public class ConsolidacionService : IConsolidacionService
             foreach (var s in maestro.Sociedades.Where(s => !string.IsNullOrWhiteSpace(s.Sociedad)))
                 sociedadDict.TryAdd(s.Sociedad.Trim(), s);
 
+
             var industriaDict = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (var i in maestro.Industrias.Where(i => !string.IsNullOrWhiteSpace(i.CodIndustria)))
                 industriaDict.TryAdd(i.CodIndustria.Trim(), i.Vertical.Trim());
@@ -199,8 +200,17 @@ public class ConsolidacionService : IConsolidacionService
             foreach (var a in maestro.Areas.Where(a => !string.IsNullOrWhiteSpace(a.CeBe)))
                 areaDict.TryAdd(a.CeBe.Trim(), a.Area.Trim());
 
+            // Responsable: responsable_wbs → nombre completo (Bug 145)
+            var responsableDict = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var r in maestro.Responsables.Where(r => !string.IsNullOrWhiteSpace(r.ResponsableWbs)))
+                responsableDict.TryAdd(r.ResponsableWbs.Trim(), r.ResponsableName.Trim());
+
             // ── Agregar GR55 → IngresoReal / CostoReal ───────────────────────
+            // Solo cuentas clasificadas en el Maestro (Accounts_Group) afectan el cálculo:
+            //   "Ingreso" → IngresoReal · "costos" → CostoReal.
+            // Las cuentas sin clasificación se ignoran para no inflar el costo (Bug 138).
             var gr55Agg = new Dictionary<ClaveProyecto, Gr55Bucket>();
+            var cuentasSinClasif = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             foreach (var r in (gr55Registros ?? []).Where(r => !string.IsNullOrWhiteSpace(r.ElementoPEP)))
             {
@@ -211,14 +221,22 @@ public class ConsolidacionService : IConsolidacionService
                 var prev = gr55Agg.GetValueOrDefault(clave)
                            ?? new Gr55Bucket(0m, 0m, string.Empty, string.Empty);
 
-                var esIngreso = clasif?.Equals("Ingreso", StringComparison.OrdinalIgnoreCase) == true;
+                var esIngreso = clasif?.StartsWith("Ingreso", StringComparison.OrdinalIgnoreCase) == true;
+                var esCosto   = clasif?.StartsWith("costo",   StringComparison.OrdinalIgnoreCase) == true;
+                if (!esIngreso && !esCosto && valor != 0m)
+                    cuentasSinClasif.Add(r.NumeroCuenta.Trim());
 
                 gr55Agg[clave] = new Gr55Bucket(
-                    IngresoReal     : prev.IngresoReal + (esIngreso ?  valor : 0m),
-                    CostoReal       : prev.CostoReal   + (esIngreso ? 0m : -valor),
+                    IngresoReal     : prev.IngresoReal + (esIngreso ? valor  : 0m),
+                    CostoReal       : prev.CostoReal   + (esCosto   ? -valor : 0m),
                     SocReceptora    : r.SocReceptora,
                     CentroBeneficio : r.CentroBeneficio);
             }
+
+            if (cuentasSinClasif.Count > 0)
+                warnings.Add($"GR55: {cuentasSinClasif.Count} cuenta(s) sin clasificación en el Maestro se ignoraron " +
+                             $"(no suman ingreso ni costo): {string.Join(", ", cuentasSinClasif.OrderBy(c => c).Take(20))}" +
+                             (cuentasSinClasif.Count > 20 ? "…" : ""));
 
             // ── Agregar Planeación → IngresoPlaneado / CostoPlaneado (COP → USD) ─
             var ultimaTasaCop = tdcDict.Count > 0
@@ -252,13 +270,57 @@ public class ConsolidacionService : IConsolidacionService
             foreach (var (año, mes) in periodosSinTasa.OrderBy(x => x.Año).ThenBy(x => x.Mes))
                 warnings.Add($"Planeación {año}/{mes:D2}: sin tasa TDC — se usó última tasa disponible ({ultimaTasaCop:F2}) como proxy.");
 
+            // Fallback de responsable por proyecto: cuando un período no tiene responsable
+            // (sin registro de planeación), se reutiliza el responsable_wbs del mismo proyecto
+            // en otro período disponible (Bug 149).
+            var responsableWbsPorProyecto = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var kv in planAgg)
+                if (!string.IsNullOrWhiteSpace(kv.Value.Responsable))
+                    responsableWbsPorProyecto.TryAdd(kv.Key.CodProyecto, kv.Value.Responsable);
+
             // ── Agregar Horas por (Proyecto, Año, Mes) ───────────────────────
-            var horasAgg = new Dictionary<ClaveProyecto, decimal>();
+            // HorasBucket preserva proyecto_sociedad_fi además de las horas acumuladas.
+            // Es la fuente primaria de Sociedad/País; GR55 SocReceptora es el fallback.
+            var horasAgg = new Dictionary<ClaveProyecto, HorasBucket>();
 
             foreach (var r in (horasRegistros ?? []).Where(r => !string.IsNullOrWhiteSpace(r.Proyecto)))
             {
-                var clave = new ClaveProyecto(r.Proyecto.Trim(), r.Año, r.Mes);
-                horasAgg[clave] = horasAgg.GetValueOrDefault(clave) + r.Horas;
+                var clave    = new ClaveProyecto(r.Proyecto.Trim(), r.Año, r.Mes);
+                var existing = horasAgg.GetValueOrDefault(clave);
+                // Horas se acumulan; sociedad: tomar la primera no vacía encontrada
+                var sociedad = !string.IsNullOrWhiteSpace(r.Sociedad)
+                    ? r.Sociedad
+                    : existing?.Sociedad ?? string.Empty;
+                horasAgg[clave] = new HorasBucket((existing?.Horas ?? 0m) + r.Horas, sociedad);
+            }
+
+            // Mapa canónico de sociedad: colapsa todas las variantes crudas (con/sin
+            // código de país, sólo código) a un único valor por código (Bug 133).
+            var sociedadCanonica = ConstruirSociedadCanonica(
+                horasAgg.Values.Select(b => b.Sociedad)
+                    .Concat(gr55Agg.Values.Select(g => g.SocReceptora)),
+                sociedadDict);
+
+            // Fallback de metadatos por proyecto entre períodos (Bug 149): cuando un
+            // período carece de cliente/industria/cebe/sociedad (porque la fuente que
+            // los aporta no tiene ese año/mes), se reutiliza el primer valor no vacío
+            // del mismo proyecto en cualquier otro período disponible.
+            var clientePorProyecto   = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var industriaPorProyecto = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var cebePorProyecto      = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var socRawPorProyecto    = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var kv in planAgg)
+            {
+                if (!string.IsNullOrWhiteSpace(kv.Value.Cliente))   clientePorProyecto.TryAdd(kv.Key.CodProyecto, kv.Value.Cliente);
+                if (!string.IsNullOrWhiteSpace(kv.Value.Industria)) industriaPorProyecto.TryAdd(kv.Key.CodProyecto, kv.Value.Industria);
+                if (!string.IsNullOrWhiteSpace(kv.Value.Cebe))      cebePorProyecto.TryAdd(kv.Key.CodProyecto, kv.Value.Cebe);
+            }
+            foreach (var kv in horasAgg) // sociedad primaria = proyecto_sociedad_fi (Horas)
+                if (!string.IsNullOrWhiteSpace(kv.Value.Sociedad)) socRawPorProyecto.TryAdd(kv.Key.CodProyecto, kv.Value.Sociedad);
+            foreach (var kv in gr55Agg)
+            {
+                if (!string.IsNullOrWhiteSpace(kv.Value.CentroBeneficio)) cebePorProyecto.TryAdd(kv.Key.CodProyecto, kv.Value.CentroBeneficio);
+                if (!string.IsNullOrWhiteSpace(kv.Value.SocReceptora))    socRawPorProyecto.TryAdd(kv.Key.CodProyecto, kv.Value.SocReceptora);
             }
 
             // ── Unión de todas las claves únicas ─────────────────────────────
@@ -277,27 +339,57 @@ public class ConsolidacionService : IConsolidacionService
                 {
                     gr55Agg.TryGetValue(clave, out var g);
                     planAgg.TryGetValue(clave, out var p);
-                    horasAgg.TryGetValue(clave, out var horas);
+                    horasAgg.TryGetValue(clave, out var bucket);
+                    var horas = bucket?.Horas ?? 0m;
 
-                    var rawSoc = g?.SocReceptora ?? string.Empty;
-                    sociedadDict.TryGetValue(rawSoc, out var socRef);
-                    var sociedad = socRef?.RazonSocial ?? rawSoc;
-                    var pais     = socRef?.Pais ?? string.Empty;
+                    // Sociedad: primaria = Horas (proyecto_sociedad_fi); fallback = GR55 SocReceptora;
+                    // y, si el período no la tiene, el mismo proyecto en otro período (Bug 149).
+                    // Se normaliza a un único valor canónico por sociedad (Bug 133).
+                    var rawSoc = !string.IsNullOrWhiteSpace(bucket?.Sociedad)
+                        ? bucket.Sociedad.Trim()
+                        : !string.IsNullOrWhiteSpace(g?.SocReceptora)
+                            ? g.SocReceptora.Trim()
+                            : socRawPorProyecto.GetValueOrDefault(clave.CodProyecto, string.Empty).Trim();
+                    string sociedad, pais;
+                    if (sociedadCanonica.TryGetValue(rawSoc, out var canon))
+                        { sociedad = canon.Nombre; pais = canon.Pais; }
+                    else
+                        { sociedad = rawSoc; pais = string.Empty; }
 
+                    // CeBe: GR55 → Planeación → mismo proyecto en otro período (Bug 149)
                     var rawCebe = !string.IsNullOrWhiteSpace(g?.CentroBeneficio)
                         ? g.CentroBeneficio
-                        : p?.Cebe ?? string.Empty;
+                        : !string.IsNullOrWhiteSpace(p?.Cebe)
+                            ? p!.Cebe
+                            : cebePorProyecto.GetValueOrDefault(clave.CodProyecto, string.Empty);
 
                     var cebeNombre = rawCebe;
                     if (!string.IsNullOrWhiteSpace(rawCebe) && cebeDict.TryGetValue(rawCebe, out var cebeRef))
                         cebeNombre = cebeRef.Nombre;
 
-                    var industria = p?.Industria ?? string.Empty;
+                    // Industria: del período o, si falta, del mismo proyecto en otro período (Bug 149)
+                    var industria = !string.IsNullOrWhiteSpace(p?.Industria)
+                        ? p!.Industria
+                        : industriaPorProyecto.GetValueOrDefault(clave.CodProyecto, string.Empty);
                     var vertical  = industriaDict.TryGetValue(industria, out var vNombre) ? vNombre : industria;
 
                     var area = string.Empty;
                     if (!string.IsNullOrWhiteSpace(rawCebe))
                         areaDict.TryGetValue(rawCebe, out area!);
+
+                    // Responsable: wbs del período o, si falta, el del mismo proyecto en otro
+                    // período (Bug 149); luego se traduce wbs → nombre completo (Bug 145).
+                    var respWbs = !string.IsNullOrWhiteSpace(p?.Responsable)
+                        ? p!.Responsable
+                        : responsableWbsPorProyecto.GetValueOrDefault(clave.CodProyecto, string.Empty);
+                    var responsable = !string.IsNullOrWhiteSpace(respWbs) && responsableDict.TryGetValue(respWbs.Trim(), out var respNombre)
+                        ? respNombre
+                        : LimpiarHtml(respWbs);
+
+                    // Cliente: del período o, si falta, del mismo proyecto en otro período (Bug 149)
+                    var cliente = !string.IsNullOrWhiteSpace(p?.Cliente)
+                        ? p!.Cliente
+                        : clientePorProyecto.GetValueOrDefault(clave.CodProyecto, string.Empty);
 
                     proyectos.Add(new Proyecto
                     {
@@ -316,8 +408,8 @@ public class ConsolidacionService : IConsolidacionService
                         Industria        = industria,
                         Vertical         = vertical ?? string.Empty,
                         Area             = area ?? string.Empty,
-                        Cliente          = LimpiarHtml(p?.Cliente),
-                        Responsable      = LimpiarHtml(p?.Responsable),
+                        Cliente          = LimpiarHtml(cliente),
+                        Responsable      = responsable,
                     });
 
                     exitosos++;
@@ -567,4 +659,79 @@ public class ConsolidacionService : IConsolidacionService
             fuente.Error               = error;
         }
     }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // Helper: construye el mapa raw→canónico de sociedad (Bug 133).
+    // Agrupa por código numérico líder; el canónico es "{código} - {RazonSocial}"
+    // del maestro si existe, o el nombre más completo visto (sin prefijo de país)
+    // para códigos ausentes del maestro. Colapsa así variantes como
+    // "1060", "1060 - PER - Nearshore..." y "1060 - Nearshore..." en un solo valor.
+    // ════════════════════════════════════════════════════════════════════════
+    private static Dictionary<string, (string Nombre, string Pais)> ConstruirSociedadCanonica(
+        IEnumerable<string> valoresCrudos,
+        Dictionary<string, SociedadReferenciaDto> porCodigo)
+    {
+        static string CodigoDe(string s)
+        {
+            var m = System.Text.RegularExpressions.Regex.Match(s ?? "", @"^\s*(\d{3,})");
+            return m.Success ? m.Groups[1].Value : string.Empty;
+        }
+        static string NombreDe(string s)
+        {
+            var t = System.Text.RegularExpressions.Regex.Replace(s ?? "", @"^\s*\d{3,}\s*-?\s*", "");
+            t = System.Text.RegularExpressions.Regex.Replace(t, @"^[A-Z]{2,4}\s*-\s*", ""); // ISO país
+            return t.Trim();
+        }
+
+        var distintos = valoresCrudos
+            .Where(v => !string.IsNullOrWhiteSpace(v))
+            .Select(v => v.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        // Mejor nombre visto por código (el más largo, sin prefijo de país)
+        var mejorNombre = new Dictionary<string, string>();
+        foreach (var v in distintos)
+        {
+            var cod = CodigoDe(v);
+            if (cod == "") continue;
+            var nom = NombreDe(v);
+            if (!mejorNombre.TryGetValue(cod, out var prev) || nom.Length > prev.Length)
+                mejorNombre[cod] = nom;
+        }
+
+        // Canónico por código (maestro si existe, si no el mejor nombre observado)
+        var canonPorCodigo = new Dictionary<string, (string Nombre, string Pais)>();
+        foreach (var cod in mejorNombre.Keys)
+        {
+            if (porCodigo.TryGetValue(cod, out var refM))
+                canonPorCodigo[cod] = ($"{cod} - {refM.RazonSocial.Trim()}", refM.Pais?.Trim() ?? "");
+            else
+            {
+                var nom = mejorNombre[cod];
+                canonPorCodigo[cod] = (nom.Length > 0 ? $"{cod} - {nom}" : cod, "");
+            }
+        }
+
+        var map = new Dictionary<string, (string Nombre, string Pais)>(StringComparer.OrdinalIgnoreCase);
+        foreach (var v in distintos)
+        {
+            var cod = CodigoDe(v);
+            if (cod != "" && canonPorCodigo.TryGetValue(cod, out var canon))
+                map[v] = canon;
+            else
+            {
+                // Sin código: intentar coincidencia exacta por RazonSocial en el maestro
+                var refByName = porCodigo.Values.FirstOrDefault(s =>
+                    string.Equals(s.RazonSocial?.Trim(), v, StringComparison.OrdinalIgnoreCase));
+                map[v] = refByName != null
+                    ? ($"{refByName.Sociedad.Trim()} - {refByName.RazonSocial.Trim()}", refByName.Pais?.Trim() ?? "")
+                    : (v, string.Empty);
+            }
+        }
+        return map;
+    }
 }
+
+// Bucket auxiliar para acumular horas y preservar proyecto_sociedad_fi por (Proyecto, Año, Mes)
+file record HorasBucket(decimal Horas, string Sociedad);

@@ -70,9 +70,21 @@ public class ProyectoService : IProyectoService
         if (f.CodProyecto?.Length > 0) q = q.Where(p => f.CodProyecto.Contains(p.CodProyecto));
         if (f.Vertical?.Length > 0)    q = q.Where(p => f.Vertical.Contains(p.Vertical));
         if (f.Area?.Length > 0)        q = q.Where(p => f.Area.Contains(p.Area));
+        // Filtro UI "Sociedad" (viaja en el campo Pais) — muestra/filtra el PAÍS de la
+        // hoja Sociedad del maestro (Bug 133/122).
         if (f.Pais?.Length > 0)        q = q.Where(p => f.Pais.Contains(p.Pais));
 
         var moneda = (f.Moneda ?? "COP").ToUpperInvariant();
+
+        // Último TDC COP disponible — proxy para períodos futuros sin tasa registrada.
+        var ultimaTasaCop = moneda == "COP"
+            ? await _db.TiposCambio
+                .Where(t => t.Moneda == "COP")
+                .OrderByDescending(t => t.Año).ThenByDescending(t => t.Mes)
+                .Select(t => t.Tasa)
+                .FirstOrDefaultAsync()
+            : 1m;
+        if (ultimaTasaCop == 0) ultimaTasaCop = 1m;
 
         // LEFT JOIN con TiposCambio COP para obtener la tasa de conversión.
         // Si moneda == "USD" los valores ya están en USD → Factor = 1 siempre.
@@ -86,16 +98,31 @@ public class ProyectoService : IProyectoService
                 p.Año, p.Mes, p.Cliente, p.CodProyecto, p.Industria, p.Vertical,
                 p.Area, p.Sociedad, p.Pais, p.CeBe, p.Responsable,
                 p.IngresoReal, p.IngresoPlaneado, p.CostoReal, p.CostoPlaneado, p.Horas,
-                TasaCop = tc == null ? 1m : tc.Tasa
+                TasaCop = (decimal?)tc.Tasa   // null cuando no hay TDC para ese período
             }
         ).ToListAsync();
 
-        var datos = raw.Select(x => new Flat(
-            x.Año, x.Mes, x.Cliente, x.CodProyecto, x.Industria, x.Vertical,
-            x.Area, x.Sociedad, x.Pais, x.CeBe, x.Responsable,
-            x.IngresoReal, x.IngresoPlaneado, x.CostoReal, x.CostoPlaneado, x.Horas,
-            Factor: moneda == "USD" ? 1m : x.TasaCop
-        )).ToList();
+        // Deduplicar: TiposCambio puede tener varias filas por período (múltiples consolidaciones),
+        // lo que hace que el LEFT JOIN multiplique las filas de Proyectos.
+        // Agrupa por (CodProyecto, Año, Mes) y acumula los valores financieros.
+        var datos = raw
+            .GroupBy(x => new { x.CodProyecto, x.Año, x.Mes })
+            .Select(g =>
+            {
+                var first = g.First();
+                var tasa  = g.Select(x => x.TasaCop).FirstOrDefault(t => t.HasValue);
+                return new Flat(
+                    first.Año, first.Mes, first.Cliente, first.CodProyecto, first.Industria, first.Vertical,
+                    first.Area, first.Sociedad, first.Pais, first.CeBe, first.Responsable,
+                    IngresoReal    : g.Sum(x => x.IngresoReal),
+                    IngresoPlaneado: g.Sum(x => x.IngresoPlaneado),
+                    CostoReal      : g.Sum(x => x.CostoReal),
+                    CostoPlaneado  : g.Sum(x => x.CostoPlaneado),
+                    Horas          : g.Sum(x => x.Horas),
+                    Factor         : moneda == "USD" ? 1m : (tasa ?? ultimaTasaCop)
+                );
+            })
+            .ToList();
 
         return (datos, true);
     }
@@ -104,6 +131,19 @@ public class ProyectoService : IProyectoService
     private static string Label(int año, int mes) => $"{año}-{mes:D2}";
     private static decimal Semaforo_Ingreso(decimal real, decimal plan) =>
         real >= plan ? 0m : 1m; // 0=Verde, 1=Rojo (helper numérico)
+
+    // ── Período cerrado / valor efectivo (HUE-04, Bug 139) ───────────────────
+    // Un período está cerrado si ya finalizó respecto a la fecha actual.
+    // Para períodos cerrados se usa el valor REAL; para no cerrados, el PROYECTADO.
+    private static bool EsPeriodoCerrado(int año, int mes)
+    {
+        var hoy = DateTime.Now;
+        return año < hoy.Year || (año == hoy.Year && mes < hoy.Month);
+    }
+    private static decimal IngresoEfectivo(Flat d) =>
+        EsPeriodoCerrado(d.Año, d.Mes) ? d.IngresoReal : d.IngresoPlaneado;
+    private static decimal CostoEfectivo(Flat d) =>
+        EsPeriodoCerrado(d.Año, d.Mes) ? d.CostoReal : d.CostoPlaneado;
 
     // ════════════════════════════════════════════════════════════════════════
     // GET /api/kpis — 5 indicadores (Task 16)
@@ -128,20 +168,27 @@ public class ProyectoService : IProyectoService
         if (!todosDatos.Any(d => d.Año == añoActivo))
             añoActivo = todosDatos.Max(d => d.Año);
 
-        // Mes activo = filtro del usuario, o el mes en curso (YTD hasta hoy)
+        // Mes activo = filtro del usuario, o el mes en curso (YTD hasta hoy).
+        // Para años históricos sin mes explícito → mostrar el año completo (mes 12).
         var mesActivo = filtro.Mes?.Length > 0
             ? filtro.Mes.Max()
-            : DateTime.Now.Month;
+            : añoActivo < DateTime.Now.Year ? 12 : DateTime.Now.Month;
 
-        // Acumulado YTD: año activo, desde mes 1 hasta mes activo
-        var datos = todosDatos.Where(d => d.Año == añoActivo && d.Mes <= mesActivo).ToList();
+        // Selección de datos del KPI:
+        //  - Con meses explícitos en el filtro → SOLO esos meses (alinea el GM% del KPI
+        //    con scatter/heatmap/tabla, que respetan el filtro exacto — Bug 135).
+        //  - Sin meses → acumulado YTD del año activo (mes 1 hasta mes activo, HUE-04).
+        var datos = (filtro.Mes?.Length > 0
+            ? todosDatos.Where(d => d.Año == añoActivo && filtro.Mes.Contains(d.Mes))
+            : todosDatos.Where(d => d.Año == añoActivo && d.Mes <= mesActivo)).ToList();
         if (datos.Count == 0)
             return ApiResponse<KpisDto>.Ok(new KpisDto(), "Sin datos para el período activo.");
 
         // ── Métricas base ────────────────────────────────────────────────────
-        var ingresoReal   = datos.Sum(d => d.IngresoReal      * d.Factor);
+        // Ingreso/costo efectivos: real para meses cerrados, proyectado para no cerrados (Bug 139).
+        var ingresoReal   = datos.Sum(d => IngresoEfectivo(d)  * d.Factor);
         var ingresoPlan   = datos.Sum(d => d.IngresoPlaneado   * d.Factor);
-        var costoReal     = datos.Sum(d => d.CostoReal         * d.Factor);
+        var costoReal     = datos.Sum(d => CostoEfectivo(d)    * d.Factor);
         var costoPlan     = datos.Sum(d => d.CostoPlaneado     * d.Factor);
         var horasTotal    = datos.Sum(d => d.Horas);
         var gm            = ingresoReal - costoReal;
@@ -167,7 +214,7 @@ public class ProyectoService : IProyectoService
             .Select(g =>
             {
                 var h = g.Sum(d => d.Horas);
-                return (CodProyecto: g.Key, Tarifa: h != 0 ? g.Sum(d => d.IngresoReal * d.Factor) / h : 0m);
+                return (CodProyecto: g.Key, Tarifa: h != 0 ? g.Sum(d => IngresoEfectivo(d) * d.Factor) / h : 0m);
             })
             .OrderByDescending(x => x.Tarifa)
             .FirstOrDefault();
@@ -179,13 +226,33 @@ public class ProyectoService : IProyectoService
         var mesesEnAño = periodos.Select(p => p.Mes).Distinct().Count();
         var esCerrado  = mesesEnAño == 12;
 
-        var subtituloRango = esCerrado
-            ? $"Todos {añoActivo}"
-            : primerPer == ultimoPer
-                ? $"{_mesesAbr[ultimoPer.Mes - 1]} {añoActivo}"
-                : primerPer.Año == ultimoPer.Año
-                    ? $"{_mesesAbr[primerPer.Mes - 1]}–{_mesesAbr[ultimoPer.Mes - 1]} {añoActivo}"
-                    : $"{_mesesAbr[primerPer.Mes - 1]} {primerPer.Año}–{_mesesAbr[ultimoPer.Mes - 1]} {añoActivo}";
+        // Meses efectivamente considerados: los del filtro (si hay) o los presentes en datos
+        var mesesFiltro = (filtro.Mes?.Length > 0
+            ? filtro.Mes.OrderBy(m => m)
+            : periodos.Select(p => p.Mes).Distinct().OrderBy(m => m)).ToArray();
+
+        // Detectar si los meses son consecutivos (sin huecos)
+        var esMesesConsecutivos = mesesFiltro.Length <= 1;
+        if (!esMesesConsecutivos)
+        {
+            esMesesConsecutivos = true;
+            for (int i = 1; i < mesesFiltro.Length; i++)
+                if (mesesFiltro[i] - mesesFiltro[i - 1] != 1) { esMesesConsecutivos = false; break; }
+        }
+
+        string subtituloRango;
+        if (esCerrado)
+            subtituloRango = $"Todos {añoActivo}";
+        else if (primerPer == ultimoPer)
+            subtituloRango = $"{_mesesAbr[ultimoPer.Mes - 1]} {añoActivo}";
+        else if (esMesesConsecutivos)
+            // Rango continuo: "Ene–Abr 2026"
+            subtituloRango = primerPer.Año == ultimoPer.Año
+                ? $"{_mesesAbr[mesesFiltro[0] - 1]}–{_mesesAbr[mesesFiltro[^1] - 1]} {añoActivo}"
+                : $"{_mesesAbr[mesesFiltro[0] - 1]} {primerPer.Año}–{_mesesAbr[mesesFiltro[^1] - 1]} {añoActivo}";
+        else
+            // Meses discretos no consecutivos: "Ene 2026, Mar 2026"
+            subtituloRango = string.Join(", ", mesesFiltro.Select(m => $"{_mesesAbr[m - 1]} {añoActivo}"));
 
         var subtituloGM = $"{_mesesAbr[ultimoPer.Mes - 1]} {añoActivo} | {(esCerrado ? "Total" : añoActivo.ToString())}";
 
@@ -270,6 +337,7 @@ public class ProyectoService : IProyectoService
             if (excluir != "proyecto" && f.CodProyecto?.Length > 0) q = q.Where(p => f.CodProyecto.Contains(p.CodProyecto));
             if (excluir != "vertical" && f.Vertical?.Length   > 0) q = q.Where(p => f.Vertical.Contains(p.Vertical));
             if (excluir != "area"     && f.Area?.Length        > 0) q = q.Where(p => f.Area.Contains(p.Area));
+            // "pais" = filtro UI "Sociedad": filtra por el país del maestro (Bug 133/122)
             if (excluir != "pais"     && f.Pais?.Length        > 0) q = q.Where(p => f.Pais.Contains(p.Pais));
             if (excluir != "año"      && f.Año?.Length         > 0) q = q.Where(p => f.Año.Contains(p.Año));
             if (excluir != "mes"      && f.Mes?.Length         > 0) q = q.Where(p => f.Mes.Contains(p.Mes));
@@ -285,6 +353,8 @@ public class ProyectoService : IProyectoService
                              .Distinct().OrderBy(v => v).ToListAsync();
         var areas      = await Sin("area").Select(p => p.Area).Where(v => v != "")
                              .Distinct().OrderBy(v => v).ToListAsync();
+        // Dropdown "Sociedad" (campo Paises del DTO): listar el PAÍS de la hoja Sociedad
+        // del maestro, que es lo que ahora muestra la columna en la tabla (Bug 133/122).
         var paises     = await Sin("pais").Select(p => p.Pais).Where(v => v != "")
                              .Distinct().OrderBy(v => v).ToListAsync();
         var años       = await Sin("año").Select(p => p.Año)
@@ -325,7 +395,8 @@ public class ProyectoService : IProyectoService
 
         foreach (var periodo in porPeriodo)
         {
-            var totalPeriodo = periodo.Sum(d => d.IngresoReal * d.Factor);
+            // Valor efectivo: real en períodos cerrados, proyectado en no cerrados (Bug 139)
+            var totalPeriodo = periodo.Sum(d => IngresoEfectivo(d) * d.Factor);
             var prevAño = periodo.Key.Mes == 1 ? periodo.Key.Año - 1 : periodo.Key.Año;
             var prevMes = periodo.Key.Mes == 1 ? 12 : periodo.Key.Mes - 1;
 
@@ -333,7 +404,7 @@ public class ProyectoService : IProyectoService
                 .GroupBy(d => agruparPor == "area" ? d.Area : d.Vertical)
                 .Select(sg =>
                 {
-                    var ing = sg.Sum(d => d.IngresoReal * d.Factor);
+                    var ing = sg.Sum(d => IngresoEfectivo(d) * d.Factor);
                     ingPorSegmentoPrev.TryGetValue((prevAño, prevMes, sg.Key), out var ingSegPrev);
                     return new BarrasApiladasItemDto
                     {
@@ -360,45 +431,58 @@ public class ProyectoService : IProyectoService
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    // Gráfica 2 — Plan vs Real (últimos 3 meses del año activo)
+    // Gráfica 2 — Plan vs Real (últimos 3 meses consecutivos)
+    // El rango puede cruzar año (ej. Nov–Dic 2025 + Ene 2026).
     // ════════════════════════════════════════════════════════════════════════
     public async Task<ApiResponse<PlanVsRealResponseDto>> GraficaPlanVsRealAsync(ProyectoFiltros filtro)
     {
-        // Ignorar filtro de mes; usar año activo (del filtro o máximo en datos)
-        var filtroSinMes = filtro with { Mes = null };
-        var (datos, _) = await CargarDatosAsync(filtroSinMes);
-        if (datos.Count == 0)
+        // Cargar sin restricción de año/mes para poder incluir meses del año anterior
+        var filtroSinPeriodo = filtro with { Año = null, Mes = null };
+        var (todosDatos, _) = await CargarDatosAsync(filtroSinPeriodo);
+        if (todosDatos.Count == 0)
             return ApiResponse<PlanVsRealResponseDto>.Ok(new PlanVsRealResponseDto());
 
-        // Año activo = filtro del usuario, o el año en curso (HUE-04)
-        var añoActivo = filtro.Año?.FirstOrDefault() > 0
-            ? filtro.Año.First()
-            : datos.Any(d => d.Año == DateTime.Now.Year)
-                ? DateTime.Now.Year
-                : datos.Max(d => d.Año);
+        // Período de referencia: mes/año seleccionado en filtro, o el más reciente con datos
+        (int Año, int Mes) periodoRef;
+        if (filtro.Año?.Length > 0 && filtro.Mes?.Length > 0)
+        {
+            periodoRef = (filtro.Año.Max(), filtro.Mes.Max());
+        }
+        else if (filtro.Año?.Length > 0)
+        {
+            int añoFiltro = filtro.Año.Max();
+            int ultimoMes = todosDatos
+                .Where(d => d.Año == añoFiltro && d.IngresoReal > 0)
+                .Select(d => d.Mes)
+                .DefaultIfEmpty(todosDatos.Where(d => d.Año == añoFiltro).Select(d => d.Mes).DefaultIfEmpty(0).Max())
+                .Max();
+            periodoRef = ultimoMes > 0 ? (añoFiltro, ultimoMes) : (añoFiltro, 12);
+        }
+        else
+        {
+            var refConReal = todosDatos
+                .Where(d => d.IngresoReal > 0)
+                .OrderByDescending(d => d.Año).ThenByDescending(d => d.Mes)
+                .Select(d => (d.Año, d.Mes))
+                .FirstOrDefault();
+            periodoRef = refConReal != default
+                ? refConReal
+                : todosDatos.OrderByDescending(d => d.Año).ThenByDescending(d => d.Mes)
+                            .Select(d => (d.Año, d.Mes)).First();
+        }
 
-        // Últimos 3 meses del año activo con datos reales (IngresoReal > 0)
-        // Si no hay meses con real, caer a los últimos 3 meses con cualquier dato
-        var mesesConReal = datos
-            .Where(d => d.Año == añoActivo && d.IngresoReal > 0)
-            .Select(d => d.Mes)
-            .Distinct()
-            .OrderByDescending(m => m)
-            .Take(3)
-            .OrderBy(m => m)
+        // 3 períodos consecutivos que terminan en periodoRef (representación lineal mes=año*12+mes-1)
+        int refLinear = periodoRef.Año * 12 + (periodoRef.Mes - 1);
+        var periodos3 = Enumerable.Range(0, 3)
+            .Select(i => { int l = refLinear - (2 - i); return (Año: l / 12, Mes: l % 12 + 1); })
             .ToList();
 
-        var mesesDisponibles = mesesConReal.Count > 0
-            ? mesesConReal
-            : datos.Where(d => d.Año == añoActivo)
-                   .Select(d => d.Mes).Distinct()
-                   .OrderByDescending(m => m).Take(3).OrderBy(m => m).ToList();
-
-        var datosFiltrados = datos.Where(d => d.Año == añoActivo && mesesDisponibles.Contains(d.Mes));
+        var datosFiltrados = todosDatos
+            .Where(d => periodos3.Any(p => p.Año == d.Año && p.Mes == d.Mes));
 
         var periodos = datosFiltrados
             .GroupBy(d => new { d.Año, d.Mes })
-            .OrderBy(g => g.Key.Mes)
+            .OrderBy(g => g.Key.Año).ThenBy(g => g.Key.Mes)   // orden cronológico cross-year
             .Select(g => new PlanVsRealPeriodoDto
             {
                 Periodo         = Label(g.Key.Año, g.Key.Mes),
@@ -533,8 +617,8 @@ public class ProyectoService : IProyectoService
             .GroupBy(d => d.Cliente)
             .Select(g =>
             {
-                var ing   = g.Sum(d => d.IngresoReal * d.Factor);
-                var costo = g.Sum(d => d.CostoReal   * d.Factor);
+                var ing   = g.Sum(d => IngresoEfectivo(d) * d.Factor);
+                var costo = g.Sum(d => CostoEfectivo(d)   * d.Factor);
                 var horas = g.Sum(d => d.Horas);
                 var gm    = ing != 0 ? (ing - costo) / ing * 100m : 0m;
                 var tarifa = horas != 0 ? ing / horas : 0m;
@@ -566,18 +650,18 @@ public class ProyectoService : IProyectoService
     // Clientes ordenados de menor a mayor GM% promedio (HUE-10)
     // ════════════════════════════════════════════════════════════════════════
     public async Task<ApiResponse<HeatmapGmResponseDto>> GraficaHeatmapGmAsync(
-        ProyectoFiltros filtro, int pagina = 1)
+        ProyectoFiltros filtro, int pagina = 1, int tamañoPagina = 10)
     {
-        const int tamañoPagina = 10;
+        tamañoPagina = tamañoPagina is > 0 and <= 100 ? tamañoPagina : 10;
         var (datos, _) = await CargarDatosAsync(filtro);
 
-        // Calcular GM% promedio por cliente para ordenar de menor a mayor
+        // Calcular GM% promedio por cliente para ordenar de menor a mayor (valor efectivo)
         var clientesOrdenados = datos
             .GroupBy(d => d.Cliente)
             .Select(g =>
             {
-                var ing   = g.Sum(d => d.IngresoReal * d.Factor);
-                var costo = g.Sum(d => d.CostoReal   * d.Factor);
+                var ing   = g.Sum(d => IngresoEfectivo(d) * d.Factor);
+                var costo = g.Sum(d => CostoEfectivo(d)   * d.Factor);
                 var gmProm = ing != 0 ? (ing - costo) / ing * 100m : 0m;
                 return new { Cliente = g.Key, GmPromedio = gmProm };
             })
@@ -598,8 +682,8 @@ public class ProyectoService : IProyectoService
             .GroupBy(d => new { d.Cliente, d.Año, d.Mes })
             .Select(g =>
             {
-                var ing   = g.Sum(d => d.IngresoReal * d.Factor);
-                var costo = g.Sum(d => d.CostoReal   * d.Factor);
+                var ing   = g.Sum(d => IngresoEfectivo(d) * d.Factor);
+                var costo = g.Sum(d => CostoEfectivo(d)   * d.Factor);
                 var gm    = ing != 0 ? (ing - costo) / ing * 100m : 0m;
                 return new HeatmapCeldaDto
                 {
@@ -644,27 +728,42 @@ public class ProyectoService : IProyectoService
             CeBe             = d.CeBe,
             Responsable      = d.Responsable,
             Area             = d.Area,
-            Sociedad         = d.Sociedad,
-            Ingreso          = Math.Round((d.IngresoReal + d.IngresoPlaneado) * d.Factor, 2),
-            Costo            = Math.Round((d.CostoReal   + d.CostoPlaneado)   * d.Factor, 2),
-            GM               = Math.Round((d.IngresoReal + d.IngresoPlaneado - d.CostoReal - d.CostoPlaneado) * d.Factor, 2),
-            GMPct            = (d.IngresoReal + d.IngresoPlaneado) * d.Factor != 0
-                                   ? Math.Round(((d.IngresoReal + d.IngresoPlaneado - d.CostoReal - d.CostoPlaneado) * d.Factor)
-                                                / ((d.IngresoReal + d.IngresoPlaneado) * d.Factor) * 100m, 2)
+            // Sociedad = país del maestro (Bug 133/122); valores = valor efectivo (Bug 139)
+            Sociedad         = d.Pais,
+            Ingreso          = Math.Round(IngresoEfectivo(d) * d.Factor, 2),
+            Costo            = Math.Round(CostoEfectivo(d)   * d.Factor, 2),
+            GM               = Math.Round((IngresoEfectivo(d) - CostoEfectivo(d)) * d.Factor, 2),
+            GMPct            = IngresoEfectivo(d) != 0
+                                   ? Math.Round((IngresoEfectivo(d) - CostoEfectivo(d)) / IngresoEfectivo(d) * 100m, 2)
                                    : 0m,
             Horas            = d.Horas,
             TarifaEntrega    = d.Horas != 0
-                                   ? Math.Round((d.IngresoReal + d.IngresoPlaneado) * d.Factor / d.Horas, 2)
+                                   ? Math.Round(IngresoEfectivo(d) * d.Factor / d.Horas, 2)
                                    : 0m,
         }).ToList();
 
-        // Nombre de archivo según HUE-11, usando el último período del dataset
-        var ultimo = datos.Count > 0
-            ? datos.OrderByDescending(d => d.Año).ThenByDescending(d => d.Mes).First()
-            : null;
-        var año  = ultimo?.Año  ?? DateTime.UtcNow.Year;
-        var mes  = ultimo?.Mes  ?? DateTime.UtcNow.Month;
-        var nombreArchivo = $"reporte_ejecutivo_{monedaLabel}_{año}_{mes:D2}.xlsx";
+        // Nombre de archivo según HUE-11 — derivado de los filtros activos, no del dataset
+        var años  = f.Año?.Where(a => a > 0).OrderBy(a => a).ToArray() ?? [];
+        var meses = f.Mes?.Where(m => m > 0).OrderBy(m => m).ToArray() ?? [];
+        string nombreArchivo;
+        if (años.Length == 0 && meses.Length == 0)
+            nombreArchivo = $"reporte_ejecutivo_{monedaLabel}.xlsx";
+        else if (años.Length == 1 && meses.Length == 1)
+            nombreArchivo = $"reporte_ejecutivo_{monedaLabel}_{años[0]}_{meses[0]:D2}.xlsx";
+        else if (años.Length == 1 && meses.Length == 0)
+            nombreArchivo = $"reporte_ejecutivo_{monedaLabel}_{años[0]}.xlsx";
+        else if (años.Length > 1 && meses.Length == 0)
+            nombreArchivo = $"reporte_ejecutivo_{monedaLabel}_{años.First()}_{años.Last()}.xlsx";
+        else if (años.Length == 1 && meses.Length > 1)
+            nombreArchivo = $"reporte_ejecutivo_{monedaLabel}_{años[0]}_{meses.First():D2}_{meses.Last():D2}.xlsx";
+        else
+        {
+            // Combinación múltiple años + meses: usar rango real del dataset
+            var ultimo = datos.Count > 0
+                ? datos.OrderByDescending(d => d.Año).ThenByDescending(d => d.Mes).First()
+                : null;
+            nombreArchivo = $"reporte_ejecutivo_{monedaLabel}_{ultimo?.Año ?? DateTime.UtcNow.Year}_{ultimo?.Mes ?? DateTime.UtcNow.Month:D2}.xlsx";
+        }
 
         var stream = new MemoryStream();
         await stream.SaveAsAsync(filas);
@@ -679,8 +778,8 @@ public class ProyectoService : IProyectoService
         var f = new ProyectoFiltros
         {
             Moneda      = filtro.Moneda ?? "COP",
-            Año         = filtro.Año.HasValue         ? [filtro.Año.Value]         : null,
-            Mes         = filtro.Mes.HasValue         ? [filtro.Mes.Value]         : null,
+            Año         = filtro.Año?.Length > 0      ? filtro.Año                 : null,
+            Mes         = filtro.Mes?.Length > 0      ? filtro.Mes                 : null,
             Cliente     = filtro.Cliente     != null  ? [filtro.Cliente]           : null,
             CodProyecto = filtro.CodProyecto != null  ? [filtro.CodProyecto]       : null,
             Vertical    = filtro.Industria   != null  ? [filtro.Industria]         : null,
@@ -692,11 +791,20 @@ public class ProyectoService : IProyectoService
         if (!hayDatos)
             return ApiResponse<PagedResult<ProyectoDto>>.Ok(new PagedResult<ProyectoDto>(), "Sin datos disponibles.");
 
+        // Solo mostrar filas con valor efectivo (ingreso/costo) distinto de cero.
+        // Para períodos cerrados se evalúa el real; para no cerrados, el proyectado.
+        // Filas sin actividad efectiva (ej. año histórico solo con horas) se excluyen —
+        // el frontend muestra "Sin datos para esta selección".
+        var datosFiltrados = datos
+            .Where(d => IngresoEfectivo(d) != 0 || CostoEfectivo(d) != 0)
+            .OrderByDescending(d => d.Año).ThenByDescending(d => d.Mes)
+            .ToList();
+
         var pagina = Math.Max(1, filtro.Pagina);
         var tamaño = Math.Clamp(filtro.TamañoPagina, 1, 100);
-        var total  = datos.Count;
+        var total  = datosFiltrados.Count;
 
-        var items = datos
+        var items = datosFiltrados
             .Skip((pagina - 1) * tamaño)
             .Take(tamaño)
             .Select(d => new ProyectoDto
@@ -709,16 +817,17 @@ public class ProyectoService : IProyectoService
                 CeBe          = d.CeBe,
                 Responsable   = d.Responsable,
                 Area          = d.Area,
-                Sociedad      = d.Sociedad,
-                Ingreso       = Math.Round(d.IngresoReal    * d.Factor, 2),
-                Costo         = Math.Round(d.CostoReal      * d.Factor, 2),
-                GM            = Math.Round((d.IngresoReal - d.CostoReal) * d.Factor, 2),
-                GMPorcentaje  = d.IngresoReal != 0
-                                    ? Math.Round((d.IngresoReal - d.CostoReal) / d.IngresoReal * 100m, 2)
+                // Columna "Sociedad" = país del maestro (hoja Sociedad, col País) — Bug 133/122
+                Sociedad      = d.Pais,
+                Ingreso       = Math.Round(IngresoEfectivo(d) * d.Factor, 2),
+                Costo         = Math.Round(CostoEfectivo(d)   * d.Factor, 2),
+                GM            = Math.Round((IngresoEfectivo(d) - CostoEfectivo(d)) * d.Factor, 2),
+                GMPorcentaje  = IngresoEfectivo(d) != 0
+                                    ? Math.Round((IngresoEfectivo(d) - CostoEfectivo(d)) / IngresoEfectivo(d) * 100m, 2)
                                     : 0m,
                 Horas         = d.Horas,
                 TarifaEntrega = d.Horas != 0
-                                    ? Math.Round(d.IngresoReal * d.Factor / d.Horas, 2)
+                                    ? Math.Round(IngresoEfectivo(d) * d.Factor / d.Horas, 2)
                                     : 0m,
             })
             .ToList();

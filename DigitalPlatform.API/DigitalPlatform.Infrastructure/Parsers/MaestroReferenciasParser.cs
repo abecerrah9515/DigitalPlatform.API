@@ -24,6 +24,7 @@ public class MaestroReferenciasParser : IMaestroReferenciasParser
         dto.AccountsGroups = ParseSheet(archivo, sheetNames, "Accounts_Group",  ParseAccountsGroup, ref totalFilas, onProgress);
         dto.Verticales     = ParseSheet(archivo, sheetNames, "Verticales",      ParseVertical,      ref totalFilas, onProgress);
         dto.Areas          = ParseSheet(archivo, sheetNames, "Area",            ParseArea,          ref totalFilas, onProgress);
+        dto.Responsables   = ParseSheet(archivo, sheetNames, "Responsables",    ParseResponsable,   ref totalFilas, onProgress);
 
         return Task.FromResult(dto);
     }
@@ -114,6 +115,16 @@ public class MaestroReferenciasParser : IMaestroReferenciasParser
             Account       = account,
             LineItemId    = ExcelParserHelper.GetString(row, "lineitemid"),
             Clasificacion = ExcelParserHelper.GetString(row, "clasificacion"),
+        };
+    }
+
+    private ResponsableReferenciaDto? ParseResponsable(Dictionary<string, object?> row)
+    {
+        var wbs = ExcelParserHelper.GetString(row, "responsable_wbs");
+        return string.IsNullOrWhiteSpace(wbs) ? null : new ResponsableReferenciaDto
+        {
+            ResponsableWbs  = wbs,
+            ResponsableName = ExcelParserHelper.GetString(row, "responsable_name"),
         };
     }
 
