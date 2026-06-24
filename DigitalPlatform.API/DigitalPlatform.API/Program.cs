@@ -17,6 +17,7 @@ builder.Services.AddScoped<IHorasParser, HorasParser>();
 builder.Services.AddScoped<IPlaneacionParser, PlaneacionParser>();
 builder.Services.AddScoped<ITipoCambioParser, TipoCambioParser>();
 builder.Services.AddScoped<IMaestroReferenciasParser, MaestroReferenciasParser>();
+builder.Services.AddScoped<IP26Parser, P26Parser>();
 
 // Services
 builder.Services.AddScoped<IConsolidacionService, ConsolidacionService>();

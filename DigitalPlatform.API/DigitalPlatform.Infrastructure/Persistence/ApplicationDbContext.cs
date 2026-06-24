@@ -13,6 +13,7 @@ public class ApplicationDbContext : DbContext
     public DbSet<Sociedad> Sociedades => Set<Sociedad>();
     public DbSet<CeBe> CeBes => Set<CeBe>();
     public DbSet<Industria> Industrias => Set<Industria>();
+    public DbSet<PlanVerticalP26> PlanesVerticalP26 => Set<PlanVerticalP26>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -83,6 +84,19 @@ public class ApplicationDbContext : DbContext
             entity.HasKey(e => e.Id);
             entity.Property(e => e.CodIndustria).HasMaxLength(20);
             entity.Property(e => e.Vertical).HasMaxLength(100);
+        });
+
+        modelBuilder.Entity<PlanVerticalP26>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Vertical).HasMaxLength(100);
+            entity.Property(e => e.IngresoPlan).HasPrecision(18, 2);
+            entity.Property(e => e.CostoPlan).HasPrecision(18, 2);
+            entity.HasIndex(e => new { e.ConsolidacionId, e.Vertical, e.Año, e.Mes });
+            entity.HasOne(e => e.Consolidacion)
+                  .WithMany()
+                  .HasForeignKey(e => e.ConsolidacionId)
+                  .OnDelete(DeleteBehavior.Cascade);
         });
     }
 }

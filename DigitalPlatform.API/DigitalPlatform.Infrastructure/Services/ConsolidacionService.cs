@@ -34,6 +34,7 @@ public class ConsolidacionService : IConsolidacionService
     private readonly IPlaneacionParser _planeacionParser;
     private readonly ITipoCambioParser _tipoCambioParser;
     private readonly IMaestroReferenciasParser _maestroParser;
+    private readonly IP26Parser _p26Parser;
     private readonly IConfiguration _config;
     private readonly ILogger<ConsolidacionService> _logger;
 
@@ -44,6 +45,7 @@ public class ConsolidacionService : IConsolidacionService
         IPlaneacionParser planeacionParser,
         ITipoCambioParser tipoCambioParser,
         IMaestroReferenciasParser maestroParser,
+        IP26Parser p26Parser,
         IConfiguration config,
         ILogger<ConsolidacionService> logger)
     {
@@ -53,8 +55,44 @@ public class ConsolidacionService : IConsolidacionService
         _planeacionParser = planeacionParser;
         _tipoCambioParser = tipoCambioParser;
         _maestroParser = maestroParser;
+        _p26Parser     = p26Parser;
         _config        = config;
         _logger        = logger;
+    }
+
+    // ── Plan P26 aggregation bucket (por Vertical × Año × Mes) ───────────────
+    private record P26Bucket(decimal IngresoPlan, decimal CostoPlan);
+
+    // Clasificación de Task del Arch.P26 → ingreso/costo (HUE-02)
+    private static readonly HashSet<string> _p26TasksIngreso = new(StringComparer.OrdinalIgnoreCase)
+        { "1.3.1 Service Revenue", "1.3.2 Product Revenue", "1.3.3 Product Margin", "2.5.1 Product Cost" };
+    private static readonly HashSet<string> _p26TasksCosto = new(StringComparer.OrdinalIgnoreCase)
+        { "2.1.1 Labor Cost", "2.2.1 Traveling Cost", "2.3.1 Infrastructure Cost", "2.4.1 Other Direct Cost" };
+
+    // Mapeo Source.Name (P26) → Cód.Industria del maestro. La vertical final se
+    // resuelve con el mismo industriaDict que usa Proyecto, garantizando que el
+    // string de vertical coincida exactamente para la comparación (Bug/HU P26).
+    private static readonly Dictionary<string, string> _p26SourceToCodIndustria = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["01BFS"]             = "Z01", // Banca y finanzas
+        ["02Transportation"]  = "Z06", // Transporte
+        ["03Industrial"]      = "Z08", // Industrial
+        ["04Retail"]          = "Z03", // Retail
+        ["05HighTech"]        = "Z05", // Tecnología
+        ["06Healthcare"]      = "Z10", // H&l
+        ["07CPG"]             = "Z02", // Consumo masivo
+        ["08NaturalResources"]= "Z09", // Recursos Naturales
+        ["09Hospitality"]     = "Z07", // Servicios entretenimiento
+        ["10Government"]      = "Z04", // Gobierno
+        ["11Other"]           = "Z00", // Otros
+    };
+
+    // "01BFS.xlsx" → "01BFS"; tolera mayúsculas/minúsculas y la extensión.
+    private static string NormalizarSourceP26(string sourceName)
+    {
+        var s = (sourceName ?? string.Empty).Trim();
+        var dot = s.LastIndexOf('.');
+        return dot > 0 ? s[..dot] : s;
     }
 
     // ── Composite key shared across all aggregation dictionaries ────────────
@@ -86,12 +124,12 @@ public class ConsolidacionService : IConsolidacionService
             FechaInicio    = DateTime.UtcNow,
             Estado         = EstadoConsolidacion.Procesando,
             IniciadoPor    = iniciadoPor,
-            TotalRegistros = 5, // 5 parsers = unidad de progreso inicial
+            TotalRegistros = 6, // 6 parsers = unidad de progreso inicial
         };
         _db.ConsolidacionLogs.Add(log);
         await _db.SaveChangesAsync();
 
-        // Inicializar caché con los 5 archivos en estado Pendiente desde el primer momento
+        // Inicializar caché con los 6 archivos en estado Pendiente desde el primer momento
         var fuentesIniciales = new List<FuenteEstadoDto>
         {
             new() { Archivo = "GR55",               Estado = "Pendiente", RegistrosProcesados = 0, TotalRegistros = 0 },
@@ -99,6 +137,7 @@ public class ConsolidacionService : IConsolidacionService
             new() { Archivo = "Planeacion",          Estado = "Pendiente", RegistrosProcesados = 0, TotalRegistros = 0 },
             new() { Archivo = "TipoCambio",          Estado = "Pendiente", RegistrosProcesados = 0, TotalRegistros = 0 },
             new() { Archivo = "MaestroReferencias",  Estado = "Pendiente", RegistrosProcesados = 0, TotalRegistros = 0 },
+            new() { Archivo = "P26",                 Estado = "Pendiente", RegistrosProcesados = 0, TotalRegistros = 0 },
         };
         _progressCache[log.Id] = fuentesIniciales;
 
@@ -128,6 +167,7 @@ public class ConsolidacionService : IConsolidacionService
                 new() { Archivo = "Planeacion",        Estado = "Pendiente" },
                 new() { Archivo = "TipoCambio",        Estado = "Pendiente" },
                 new() { Archivo = "MaestroReferencias",Estado = "Pendiente" },
+                new() { Archivo = "P26",               Estado = "Pendiente" },
             };
         }
 
@@ -167,6 +207,12 @@ public class ConsolidacionService : IConsolidacionService
                 Path.Combine(rutaBase, _config["ConsolidacionArchivos:MaestroReferencias"] ?? "MaestroReferencias.xlsx"),
                 _maestroParser.ParsearAsync, "MaestroReferencias", warnings)
                 ?? new MaestroReferenciasDto();
+            log.RegistrosExitosos++; await _db.SaveChangesAsync();
+
+            var p26Registros = await ParsearArchivo(
+                consolidacionId,
+                Path.Combine(rutaBase, _config["ConsolidacionArchivos:P26"]                 ?? "P26.xlsx"),
+                _p26Parser.ParsearAsync, "P26", warnings);
             log.RegistrosExitosos++; await _db.SaveChangesAsync();
 
             // ── Persistir tasas COP en TiposCambio ─────────────────────────
@@ -424,6 +470,49 @@ public class ConsolidacionService : IConsolidacionService
             }
 
             _db.Proyectos.AddRange(proyectos);
+
+            // ── Agregar plan P26 por Vertical × Año × Mes (HUE-02) ─────────────
+            // Baseline de comparación del dashboard. Se clasifica el Amount por la
+            // categoría del campo Task y se resuelve la vertical con el mismo
+            // industriaDict que usa Proyecto (para que el string coincida exacto).
+            var p26Agg = new Dictionary<(string Vertical, int Año, int Mes), P26Bucket>();
+            var p26SinMapear = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var r in (p26Registros ?? []).Where(r => !string.IsNullOrWhiteSpace(r.SourceName)))
+            {
+                var esIngreso = _p26TasksIngreso.Contains(r.Task);
+                var esCosto   = _p26TasksCosto.Contains(r.Task);
+                if (!esIngreso && !esCosto) continue; // tasks de P&L no aplican al dashboard
+
+                var src = NormalizarSourceP26(r.SourceName);
+                if (!_p26SourceToCodIndustria.TryGetValue(src, out var codInd))
+                { p26SinMapear.Add(src); continue; }
+                var vertical = industriaDict.TryGetValue(codInd, out var v) ? v : codInd;
+
+                // Amount viene en COP. Se guarda como "USD-equivalente" (Amount/tasaCop)
+                // igual que IngresoPlaneado, para que el Factor del dashboard lo convierta
+                // correctamente a COP o USD según el filtro de moneda.
+                if (!tdcDict.TryGetValue((r.Año, r.Mes), out var tasaP26) || tasaP26 <= 0)
+                    tasaP26 = ultimaTasaCop;
+
+                var clave = (vertical, r.Año, r.Mes);
+                var prev  = p26Agg.GetValueOrDefault(clave) ?? new P26Bucket(0m, 0m);
+                p26Agg[clave] = new P26Bucket(
+                    IngresoPlan: prev.IngresoPlan + (esIngreso ? r.Amount / tasaP26 : 0m),
+                    CostoPlan  : prev.CostoPlan   + (esCosto   ? r.Amount / tasaP26 : 0m));
+            }
+            if (p26SinMapear.Count > 0)
+                warnings.Add($"P26: {p26SinMapear.Count} Source.Name sin mapeo a vertical: {string.Join(", ", p26SinMapear.OrderBy(s => s))}");
+
+            var planesP26 = p26Agg.Select(kv => new PlanVerticalP26
+            {
+                ConsolidacionId = log.Id,
+                Vertical    = kv.Key.Vertical,
+                Año         = kv.Key.Año,
+                Mes         = kv.Key.Mes,
+                IngresoPlan = kv.Value.IngresoPlan,
+                CostoPlan   = kv.Value.CostoPlan,
+            }).ToList();
+            _db.PlanesVerticalP26.AddRange(planesP26);
 
             // ── Estado final y contadores reales ──────────────────────────────
             var estado = exitosos == 0

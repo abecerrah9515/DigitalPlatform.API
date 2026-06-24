@@ -127,6 +127,53 @@ public class ProyectoService : IProyectoService
         return (datos, true);
     }
 
+    // ════════════════════════════════════════════════════════════════════════
+    // Plan de referencia Arch.P26 por (Año, Mes) — baseline de comparación.
+    // Filtra por la(s) vertical(es) del filtro (si hay) o suma todo el portafolio.
+    // Devuelve los valores ya convertidos a la moneda activa (USD-equiv * Factor).
+    // ════════════════════════════════════════════════════════════════════════
+    private async Task<Dictionary<(int Año, int Mes), (decimal Ingreso, decimal Costo)>>
+        CargarPlanP26PorPeriodoAsync(ProyectoFiltros f)
+    {
+        var result = new Dictionary<(int Año, int Mes), (decimal, decimal)>();
+
+        var estadosValidos = new[] { EstadoConsolidacion.Exitoso, EstadoConsolidacion.ParcialmenteExitoso };
+        var ultimoId = await _db.ConsolidacionLogs
+            .Where(l => estadosValidos.Contains(l.Estado))
+            .OrderByDescending(l => l.FechaInicio)
+            .Select(l => (int?)l.Id)
+            .FirstOrDefaultAsync();
+        if (ultimoId is null) return result;
+
+        var q = _db.PlanesVerticalP26.Where(p => p.ConsolidacionId == ultimoId);
+        if (f.Vertical?.Length > 0) q = q.Where(p => f.Vertical.Contains(p.Vertical));
+        var planes = await q.ToListAsync();
+        if (planes.Count == 0) return result;
+
+        var moneda = (f.Moneda ?? "COP").ToUpperInvariant();
+
+        // Factor de conversión por mes (igual que CargarDatosAsync): COP → tasaCop, USD → 1.
+        var tasaMap = new Dictionary<(int, int), decimal>();
+        var ultimaTasa = 1m;
+        if (moneda == "COP")
+        {
+            var tasas = await _db.TiposCambio.Where(t => t.Moneda == "COP").ToListAsync();
+            foreach (var t in tasas) tasaMap[(t.Año, t.Mes)] = t.Tasa;
+            ultimaTasa = tasas.OrderByDescending(t => t.Año).ThenByDescending(t => t.Mes)
+                              .Select(t => t.Tasa).FirstOrDefault();
+            if (ultimaTasa == 0) ultimaTasa = 1m;
+        }
+
+        foreach (var g in planes.GroupBy(p => (p.Año, p.Mes)))
+        {
+            var factor = moneda == "USD"
+                ? 1m
+                : (tasaMap.TryGetValue(g.Key, out var t) && t > 0 ? t : ultimaTasa);
+            result[g.Key] = (g.Sum(p => p.IngresoPlan) * factor, g.Sum(p => p.CostoPlan) * factor);
+        }
+        return result;
+    }
+
     // Helpers de cálculo
     private static string Label(int año, int mes) => $"{año}-{mes:D2}";
     private static decimal Semaforo_Ingreso(decimal real, decimal plan) =>
@@ -187,15 +234,34 @@ public class ProyectoService : IProyectoService
         // ── Métricas base ────────────────────────────────────────────────────
         // Ingreso/costo efectivos: real para meses cerrados, proyectado para no cerrados (Bug 139).
         var ingresoReal   = datos.Sum(d => IngresoEfectivo(d)  * d.Factor);
-        var ingresoPlan   = datos.Sum(d => d.IngresoPlaneado   * d.Factor);
         var costoReal     = datos.Sum(d => CostoEfectivo(d)    * d.Factor);
-        var costoPlan     = datos.Sum(d => d.CostoPlaneado     * d.Factor);
         var horasTotal    = datos.Sum(d => d.Horas);
         var gm            = ingresoReal - costoReal;
         var gmPct         = ingresoReal != 0 ? gm / ingresoReal * 100m : 0m;
+        var tarifa        = horasTotal  != 0 ? ingresoReal / horasTotal : 0m;
+
+        // ── Comparación contra el plan de referencia Arch.P26 (HUG-03/HUE-04) ──
+        // La comparación se deshabilita al filtrar por Cliente/Proyecto/Área, ya que
+        // P26 está a nivel de vertical/portafolio (sin esa granularidad).
+        var comparaAplica = !(filtro.Cliente?.Length > 0)
+                         && !(filtro.CodProyecto?.Length > 0)
+                         && !(filtro.Area?.Length > 0);
+
+        var ingresoPlan = 0m;
+        var costoPlan   = 0m;
+        if (comparaAplica)
+        {
+            var mesesDatos = datos.Select(d => d.Mes).Distinct().ToHashSet();
+            var planP26 = await CargarPlanP26PorPeriodoAsync(filtro);
+            foreach (var kv in planP26.Where(kv => kv.Key.Año == añoActivo && mesesDatos.Contains(kv.Key.Mes)))
+            {
+                ingresoPlan += kv.Value.Ingreso;
+                costoPlan   += kv.Value.Costo;
+            }
+        }
+
         var gmPlanPct     = ingresoPlan != 0 ? (ingresoPlan - costoPlan) / ingresoPlan * 100m : 0m;
         var gmDelta       = Math.Round(gmPct - gmPlanPct, 1);
-        var tarifa        = horasTotal  != 0 ? ingresoReal / horasTotal : 0m;
         var cumplimiento  = ingresoPlan != 0 ? ingresoReal / ingresoPlan * 100m : 0m;
         var cumplDelta    = Math.Round(cumplimiento - 100m, 1);
 
@@ -262,18 +328,20 @@ public class ProyectoService : IProyectoService
             {
                 Valor      = Math.Round(ingresoReal, 2),
                 Unidad     = monedaLabel,
-                Semaforo   = ingresoReal >= ingresoPlan ? "Verde" : "Rojo",
-                Tendencia  = ingresoReal >= ingresoPlan ? "Arriba" : "Abajo",
-                BadgeTexto = ingresoReal >= ingresoPlan ? "Sobre plan" : "Bajo plan",
+                // Comparación contra P26; neutral si se filtró Cliente/Proyecto/Área.
+                Semaforo   = !comparaAplica ? "Gris"   : ingresoReal >= ingresoPlan ? "Verde"  : "Rojo",
+                Tendencia  = !comparaAplica ? "Neutro" : ingresoReal >= ingresoPlan ? "Arriba" : "Abajo",
+                BadgeTexto = !comparaAplica ? "—"      : ingresoReal >= ingresoPlan ? "Sobre plan" : "Bajo plan",
                 Subtitulo  = subtituloRango,
             },
             MargenGM = new KpiItemDto
             {
                 Valor      = Math.Round(gmPct, 2),
                 Unidad     = "%",
+                // El semáforo de GM% es por umbral (no depende del plan); el diferencial sí.
                 Semaforo   = gmPct >= 40 ? "Verde" : gmPct >= 35 ? "Amarillo" : "Rojo",
-                Tendencia  = gmDelta >= 0 ? "Arriba" : "Abajo",
-                BadgeTexto = $"{(gmDelta >= 0 ? "▲" : "▼")} {Math.Abs(gmDelta)} pp vs plan",
+                Tendencia  = !comparaAplica ? "Neutro" : gmDelta >= 0 ? "Arriba" : "Abajo",
+                BadgeTexto = !comparaAplica ? "—" : $"{(gmDelta >= 0 ? "▲" : "▼")} {Math.Abs(gmDelta)} pp vs plan",
                 Subtitulo  = subtituloGM,
             },
             HorasEntregadas = new KpiItemDto
@@ -296,11 +364,12 @@ public class ProyectoService : IProyectoService
             },
             CumplimientoIngresosPlan = new KpiItemDto
             {
-                Valor      = Math.Round(cumplimiento, 2),
+                // Sin plan de referencia (filtro Cliente/Proyecto/Área) no hay cumplimiento.
+                Valor      = !comparaAplica ? 0m : Math.Round(cumplimiento, 2),
                 Unidad     = "%",
-                Semaforo   = cumplimiento >= 100 ? "Verde" : cumplimiento >= 90 ? "Amarillo" : "Rojo",
-                Tendencia  = cumplimiento >= 100 ? "Arriba" : "Abajo",
-                BadgeTexto = $"{(cumplDelta >= 0 ? "▲ +" : "▼ ")}{cumplDelta}%",
+                Semaforo   = !comparaAplica ? "Gris"   : cumplimiento >= 100 ? "Verde"  : cumplimiento >= 90 ? "Amarillo" : "Rojo",
+                Tendencia  = !comparaAplica ? "Neutro" : cumplimiento >= 100 ? "Arriba" : "Abajo",
+                BadgeTexto = !comparaAplica ? "—" : $"{(cumplDelta >= 0 ? "▲ +" : "▼ ")}{cumplDelta}%",
                 Subtitulo  = subtituloRango,
             },
         });
@@ -480,14 +549,25 @@ public class ProyectoService : IProyectoService
         var datosFiltrados = todosDatos
             .Where(d => periodos3.Any(p => p.Año == d.Año && p.Mes == d.Mes));
 
-        var periodos = datosFiltrados
-            .GroupBy(d => new { d.Año, d.Mes })
-            .OrderBy(g => g.Key.Año).ThenBy(g => g.Key.Mes)   // orden cronológico cross-year
-            .Select(g => new PlanVsRealPeriodoDto
+        // "Plan" proviene de P26 (HUE-05). Se omite si se filtró Cliente/Proyecto/Área.
+        var comparaAplica = !(filtro.Cliente?.Length > 0)
+                         && !(filtro.CodProyecto?.Length > 0)
+                         && !(filtro.Area?.Length > 0);
+        var planP26 = comparaAplica
+            ? await CargarPlanP26PorPeriodoAsync(filtro)
+            : new Dictionary<(int Año, int Mes), (decimal Ingreso, decimal Costo)>();
+
+        var realPorPeriodo = datosFiltrados
+            .GroupBy(d => (d.Año, d.Mes))
+            .ToDictionary(g => g.Key, g => g.Sum(d => d.IngresoReal * d.Factor));
+
+        // Siempre 3 meses consecutivos (HUE-05), aunque algún mes no tenga real o plan.
+        var periodos = periodos3
+            .Select(p => new PlanVsRealPeriodoDto
             {
-                Periodo         = Label(g.Key.Año, g.Key.Mes),
-                IngresoPlaneado = Math.Round(g.Sum(d => d.IngresoPlaneado * d.Factor), 2),
-                IngresoReal     = Math.Round(g.Sum(d => d.IngresoReal     * d.Factor), 2),
+                Periodo         = Label(p.Año, p.Mes),
+                IngresoPlaneado = Math.Round(planP26.TryGetValue((p.Año, p.Mes), out var pp) ? pp.Ingreso : 0m, 2),
+                IngresoReal     = Math.Round(realPorPeriodo.TryGetValue((p.Año, p.Mes), out var r) ? r : 0m, 2),
             })
             .ToList();
 
@@ -520,25 +600,35 @@ public class ProyectoService : IProyectoService
     {
         var (datos, _) = await CargarDatosAsync(filtro);
 
+        // Plan de referencia P26 (línea continua). Se omite si se filtró Cliente/Proyecto/Área.
+        var comparaAplica = !(filtro.Cliente?.Length > 0)
+                         && !(filtro.CodProyecto?.Length > 0)
+                         && !(filtro.Area?.Length > 0);
+        var planP26 = comparaAplica
+            ? await CargarPlanP26PorPeriodoAsync(filtro)
+            : new Dictionary<(int Año, int Mes), (decimal Ingreso, decimal Costo)>();
+
         var puntos = datos
             .GroupBy(d => new { d.Año, d.Mes })
             .OrderBy(g => g.Key.Año).ThenBy(g => g.Key.Mes)
             .Select(g =>
             {
-                var real  = g.Sum(d => d.IngresoReal     * d.Factor);
-                var plan  = g.Sum(d => d.IngresoPlaneado * d.Factor);
-                var sinPlan = plan == 0;
+                var real       = g.Sum(d => d.IngresoReal     * d.Factor); // real (GR55)
+                var proyectado = g.Sum(d => d.IngresoPlaneado * d.Factor); // proyectado (Planeación)
+                var plan       = planP26.TryGetValue((g.Key.Año, g.Key.Mes), out var pp) ? pp.Ingreso : 0m; // P26
+                var sinPlan    = plan == 0;
                 return new TendenciaPuntoDto
                 {
                     Periodo         = Label(g.Key.Año, g.Key.Mes),
                     IngresoReal     = Math.Round(real, 2),
-                    IngresoPlaneado = Math.Round(plan, 2),
+                    IngresoPlan     = Math.Round(plan, 2),
+                    IngresoPlaneado = Math.Round(proyectado, 2),
                     SinPlan         = sinPlan,
                     Variacion       = sinPlan ? 0m : Math.Round((real - plan) / plan * 100m, 2),
                     PctCumplimiento = sinPlan ? 0m : Math.Round(real / plan * 100m, 2),
                 };
             })
-            .Where(p => p.IngresoReal != 0 || p.IngresoPlaneado != 0) // omitir períodos sin ningún dato
+            .Where(p => p.IngresoReal != 0 || p.IngresoPlan != 0 || p.IngresoPlaneado != 0)
             .ToList();
 
         return ApiResponse<TendenciaResponseDto>.Ok(new TendenciaResponseDto { Puntos = puntos });
