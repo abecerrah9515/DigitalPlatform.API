@@ -177,43 +177,43 @@ public class ConsolidacionService : IConsolidacionService
         {
             var rutaBase = _config["ConsolidacionArchivos:RutaBase"] ?? string.Empty;
 
-            // ── Parsear los 5 archivos — actualizar caché antes/durante/después ──
-            var gr55Registros = await ParsearArchivo(
-                consolidacionId,
+            // ── Parsear las 6 fuentes EN PARALELO ────────────────────────────
+            // Los parsers son síncronos (trabajo CPU/IO que devuelve Task.FromResult),
+            // por lo que se ofrecen a hilos del pool con Task.Run para que corran
+            // realmente en paralelo. Cada parser lee su propio archivo y solo actualiza
+            // el caché de progreso (thread-safe); NINGUNO toca el DbContext.
+            var tGr55  = Task.Run(() => ParsearArchivo(consolidacionId,
                 Path.Combine(rutaBase, _config["ConsolidacionArchivos:GR55"]               ?? "GR55.xlsx"),
-                _gr55Parser.ParsearAsync, "GR55", warnings);
-            log.RegistrosExitosos++; await _db.SaveChangesAsync();
-
-            var horasRegistros = await ParsearArchivo(
-                consolidacionId,
+                _gr55Parser.ParsearAsync, "GR55", warnings));
+            var tHoras = Task.Run(() => ParsearArchivo(consolidacionId,
                 Path.Combine(rutaBase, _config["ConsolidacionArchivos:Horas"]              ?? "Horas.xlsx"),
-                _horasParser.ParsearAsync, "Horas", warnings);
-            log.RegistrosExitosos++; await _db.SaveChangesAsync();
-
-            var planeacionRegistros = await ParsearArchivo(
-                consolidacionId,
+                _horasParser.ParsearAsync, "Horas", warnings));
+            var tPlan  = Task.Run(() => ParsearArchivo(consolidacionId,
                 Path.Combine(rutaBase, _config["ConsolidacionArchivos:Planeacion"]         ?? "Planeacion.xlsx"),
-                _planeacionParser.ParsearAsync, "Planeacion", warnings);
-            log.RegistrosExitosos++; await _db.SaveChangesAsync();
-
-            var tdcRegistros = await ParsearArchivo(
-                consolidacionId,
+                _planeacionParser.ParsearAsync, "Planeacion", warnings));
+            var tTdc   = Task.Run(() => ParsearArchivo(consolidacionId,
                 Path.Combine(rutaBase, _config["ConsolidacionArchivos:TipoCambio"]         ?? "TDC.xlsx"),
-                _tipoCambioParser.ParsearAsync, "TipoCambio", warnings);
-            log.RegistrosExitosos++; await _db.SaveChangesAsync();
-
-            var maestro = await ParsearArchivo(
-                consolidacionId,
+                _tipoCambioParser.ParsearAsync, "TipoCambio", warnings));
+            var tMaest = Task.Run(() => ParsearArchivo(consolidacionId,
                 Path.Combine(rutaBase, _config["ConsolidacionArchivos:MaestroReferencias"] ?? "MaestroReferencias.xlsx"),
-                _maestroParser.ParsearAsync, "MaestroReferencias", warnings)
-                ?? new MaestroReferenciasDto();
-            log.RegistrosExitosos++; await _db.SaveChangesAsync();
-
-            var p26Registros = await ParsearArchivo(
-                consolidacionId,
+                _maestroParser.ParsearAsync, "MaestroReferencias", warnings));
+            var tP26   = Task.Run(() => ParsearArchivo(consolidacionId,
                 Path.Combine(rutaBase, _config["ConsolidacionArchivos:P26"]                 ?? "P26.xlsx"),
-                _p26Parser.ParsearAsync, "P26", warnings);
-            log.RegistrosExitosos++; await _db.SaveChangesAsync();
+                _p26Parser.ParsearAsync, "P26", warnings));
+
+            await Task.WhenAll(tGr55, tHoras, tPlan, tTdc, tMaest, tP26);
+
+            var gr55Registros       = tGr55.Result;
+            var horasRegistros      = tHoras.Result;
+            var planeacionRegistros = tPlan.Result;
+            var tdcRegistros        = tTdc.Result;
+            var maestro             = tMaest.Result ?? new MaestroReferenciasDto();
+            var p26Registros        = tP26.Result;
+
+            // Parseo completado (6 fuentes). El detalle por fuente ya se reflejó en el
+            // caché en vivo durante el WhenAll.
+            log.RegistrosExitosos = 6;
+            await _db.SaveChangesAsync();
 
             // ── Persistir tasas COP en TiposCambio ─────────────────────────
             await PersistirTiposCambioAsync(tdcRegistros ?? []);
@@ -576,9 +576,24 @@ public class ConsolidacionService : IConsolidacionService
             catch { errores = [log.Errores]; }
         }
 
-        var porcentaje = log.TotalRegistros > 0
-            ? (int)Math.Round(log.RegistrosExitosos * 100.0 / log.TotalRegistros)
-            : log.FechaFin.HasValue ? 100 : 0;
+        // Avance en vivo: durante el parseo paralelo el porcentaje se deriva de las
+        // fuentes ya completadas en el caché (no del contador secuencial). Al finalizar
+        // (caché removido) se reporta 100% si la corrida terminó.
+        int porcentaje;
+        if (_progressCache.TryGetValue(consolidacionId, out var fuentesPct))
+        {
+            int totalF, hechasF;
+            lock (fuentesPct)
+            {
+                totalF  = fuentesPct.Count;
+                hechasF = fuentesPct.Count(f => f.Estado is "Exitoso" or "Fallido");
+            }
+            porcentaje = totalF > 0 ? (int)Math.Round(hechasF * 100.0 / totalF) : 0;
+        }
+        else
+        {
+            porcentaje = log.FechaFin.HasValue ? 100 : 0;
+        }
 
         // ── Fuentes: caché en vivo (Procesando) → BD serializada (Completado) ─
         List<FuenteEstadoDto> fuentes = [];
@@ -698,7 +713,7 @@ public class ConsolidacionService : IConsolidacionService
         {
             var error = $"Archivo no encontrado: {ruta}";
             ActualizarFuenteEnCache(consolidacionId, nombre, "Fallido", 0, 0, error);
-            warnings.Add($"{nombre}: {error}");
+            lock (warnings) warnings.Add($"{nombre}: {error}"); // thread-safe (parseo en paralelo)
             _logger.LogWarning("ConsolidacionService: {Msg}", error);
             return null;
         }
@@ -719,7 +734,7 @@ public class ConsolidacionService : IConsolidacionService
         catch (Exception ex)
         {
             ActualizarFuenteEnCache(consolidacionId, nombre, "Fallido", 0, 0, ex.Message);
-            warnings.Add($"{nombre}: {ex.Message}");
+            lock (warnings) warnings.Add($"{nombre}: {ex.Message}"); // thread-safe (parseo en paralelo)
             _logger.LogWarning(ex, "ConsolidacionService: error parseando {Nombre}", nombre);
             return null;
         }
