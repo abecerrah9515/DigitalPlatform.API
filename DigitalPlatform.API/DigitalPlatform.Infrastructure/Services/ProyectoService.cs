@@ -49,11 +49,14 @@ public class ProyectoService : IProyectoService
     {
         var estadosValidos = new[] { EstadoConsolidacion.Exitoso, EstadoConsolidacion.ParcialmenteExitoso };
 
-        var ultimoId = await _db.ConsolidacionLogs
-            .Where(l => estadosValidos.Contains(l.Estado))
-            .OrderByDescending(l => l.FechaInicio)
-            .Select(l => (int?)l.Id)
-            .FirstOrDefaultAsync();
+        // Consolidación a consultar: la indicada en el filtro (para ver corridas
+        // anteriores) o, por defecto, la más reciente exitosa/parcialmente exitosa.
+        var ultimoId = f.ConsolidacionId
+            ?? await _db.ConsolidacionLogs
+                .Where(l => estadosValidos.Contains(l.Estado))
+                .OrderByDescending(l => l.FechaInicio)
+                .Select(l => (int?)l.Id)
+                .FirstOrDefaultAsync();
 
         if (ultimoId is null)
         {
@@ -875,6 +878,7 @@ public class ProyectoService : IProyectoService
             Vertical    = filtro.Industria   != null  ? [filtro.Industria]         : null,
             Area        = filtro.Area        != null  ? [filtro.Area]              : null,
             Pais        = filtro.Sociedad    != null  ? [filtro.Sociedad]          : null,
+            ConsolidacionId = filtro.ConsolidacionId,
         };
 
         var (datos, hayDatos) = await CargarDatosAsync(f);
