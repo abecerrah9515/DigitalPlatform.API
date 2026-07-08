@@ -109,12 +109,28 @@ public class MaestroReferenciasParser : IMaestroReferenciasParser
 
     private AccountsGroupReferenciaDto? ParseAccountsGroup(Dictionary<string, object?> row)
     {
-        var account = ExcelParserHelper.GetString(row, "account");
-        return string.IsNullOrWhiteSpace(account) ? null : new AccountsGroupReferenciaDto
+        var lineItemId = ExcelParserHelper.GetString(row, "lineitemid");
+        if (string.IsNullOrWhiteSpace(lineItemId)) return null;
+
+        // Compatibilidad: "Account Name"/"Account" y "Tipo Financiero"/"Clasificacion".
+        var account = ExcelParserHelper.GetString(row, "account name");
+        if (string.IsNullOrWhiteSpace(account)) account = ExcelParserHelper.GetString(row, "account");
+        var tipo = ExcelParserHelper.GetString(row, "tipo financiero");
+        if (string.IsNullOrWhiteSpace(tipo)) tipo = ExcelParserHelper.GetString(row, "clasificacion");
+
+        var parent = ExcelParserHelper.GetString(row, "parent id");
+        if (parent.Equals("null", StringComparison.OrdinalIgnoreCase)) parent = string.Empty;
+        var referencia = ExcelParserHelper.GetString(row, "referencia");
+        if (referencia.Equals("null", StringComparison.OrdinalIgnoreCase)) referencia = string.Empty;
+
+        return new AccountsGroupReferenciaDto
         {
+            LineItemId    = lineItemId,
             Account       = account,
-            LineItemId    = ExcelParserHelper.GetString(row, "lineitemid"),
-            Clasificacion = ExcelParserHelper.GetString(row, "clasificacion"),
+            Clasificacion = tipo,
+            ParentId      = parent,
+            Nivel         = ExcelParserHelper.GetInt(row, "nivel"),
+            Referencia    = referencia,
         };
     }
 

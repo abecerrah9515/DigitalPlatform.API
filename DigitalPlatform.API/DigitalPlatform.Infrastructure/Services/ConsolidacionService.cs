@@ -514,6 +514,54 @@ public class ConsolidacionService : IConsolidacionService
             }).ToList();
             _db.PlanesVerticalP26.AddRange(planesP26);
 
+            // ── Módulo P&L: jerarquía de cuentas + movimientos GR55 ────────────
+            // CuentaPnl = árbol de Accounts_Group (para armar la tabla P&L jerárquica).
+            var cuentasPnl = new List<CuentaPnl>();
+            var ordenPnl = 0;
+            foreach (var a in maestro.AccountsGroups.Where(a => !string.IsNullOrWhiteSpace(a.LineItemId)))
+                cuentasPnl.Add(new CuentaPnl
+                {
+                    ConsolidacionId = log.Id,
+                    LineItemId     = a.LineItemId.Trim(),
+                    AccountName    = a.Account?.Trim() ?? string.Empty,
+                    ParentId       = a.ParentId?.Trim() ?? string.Empty,
+                    Nivel          = a.Nivel,
+                    TipoFinanciero = a.Clasificacion?.Trim() ?? string.Empty,
+                    Referencia     = a.Referencia?.Trim() ?? string.Empty,
+                    Orden          = ordenPnl++,
+                });
+            _db.CuentasPnl.AddRange(cuentasPnl);
+
+            // MovimientoGR55 = GR55 agregado por (cuenta, año, mes, proyecto), con
+            // Cliente/Vertical desnormalizados para filtrar el P&L. Valor ya invertido
+            // y en USD-equivalente (igual que el dashboard).
+            var movAgg = new Dictionary<(string Cuenta, int Año, int Mes, string Proy), decimal>();
+            foreach (var r in (gr55Registros ?? [])
+                         .Where(r => !string.IsNullOrWhiteSpace(r.NumeroCuenta) && !string.IsNullOrWhiteSpace(r.ElementoPEP)))
+            {
+                var clave = (r.NumeroCuenta.Trim(), r.Ejercicio, r.PeriodoContable, r.ElementoPEP.Trim());
+                movAgg[clave] = movAgg.GetValueOrDefault(clave) + r.ValorMonedaLocalCeBe;
+            }
+            var movimientos = movAgg.Select(kv =>
+            {
+                var proy    = kv.Key.Proy;
+                var cliente = clientePorProyecto.GetValueOrDefault(proy, string.Empty);
+                var indus   = industriaPorProyecto.GetValueOrDefault(proy, string.Empty);
+                var vert    = industriaDict.TryGetValue(indus, out var vv) ? vv : string.Empty;
+                return new MovimientoGR55
+                {
+                    ConsolidacionId = log.Id,
+                    NumeroCuenta = kv.Key.Cuenta,
+                    Año          = kv.Key.Año,
+                    Mes          = kv.Key.Mes,
+                    CodProyecto  = proy,
+                    Cliente      = LimpiarHtml(cliente),
+                    Vertical     = vert,
+                    Valor        = kv.Value,
+                };
+            }).ToList();
+            _db.MovimientosGR55.AddRange(movimientos);
+
             // ── Estado final y contadores reales ──────────────────────────────
             var estado = exitosos == 0
                 ? EstadoConsolidacion.Fallido
