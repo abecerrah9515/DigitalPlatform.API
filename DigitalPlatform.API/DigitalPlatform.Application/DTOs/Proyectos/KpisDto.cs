@@ -17,4 +17,7 @@ public class KpiItemDto
     public string  Tendencia  { get; set; } = string.Empty; // Arriba, Abajo, Neutro
     public string  BadgeTexto { get; set; } = string.Empty; // "Sobre plan", "▲ +3.2 pp", "PROJ-001"
     public string  Subtitulo  { get; set; } = string.Empty; // "Ene–May 2026", "May 2026 | Total"
+    // Aclara el nivel de la comparación contra el plan P26 (que es por vertical),
+    // para no interpretar mal la diferencia al filtrar por cliente/proyecto (HUE-04).
+    public string  SubtituloReferencia { get; set; } = string.Empty;
 }
