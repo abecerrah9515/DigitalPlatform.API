@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
+using MiniExcelLibs;
 using DigitalPlatform.Application.Common;
 using DigitalPlatform.Application.DTOs.Pyl;
 using DigitalPlatform.Application.Interfaces;
@@ -66,8 +67,10 @@ public class PnlService : IPnlService
         var todosIds = cuentas.Select(c => c.LineItemId).ToList();
 
         // ── Movimientos GR55 filtrados → dict[cuenta] = valor[12] (× Factor) ──
+        // El GR55 es incremental mensual: se leen los movimientos de TODOS los meses
+        // acumulados (no de una sola consolidación) para reflejar el histórico completo.
         var movQuery = _db.MovimientosGR55.AsNoTracking()
-            .Where(m => m.ConsolidacionId == ultimoId && m.Año == año);
+            .Where(m => m.Año == año);
         if (f.Cliente?.Length  > 0) movQuery = movQuery.Where(m => f.Cliente.Contains(m.Cliente));
         if (f.Proyecto?.Length > 0) movQuery = movQuery.Where(m => f.Proyecto.Contains(m.CodProyecto));
         if (f.Vertical?.Length > 0) movQuery = movQuery.Where(m => f.Vertical.Contains(m.Vertical));
@@ -200,6 +203,39 @@ public class PnlService : IPnlService
     }
 
     // ════════════════════════════════════════════════════════════════════════
+    // GET /api/pyl/descargar — exporta la misma tabla P&L a Excel (HUE-08)
+    // ════════════════════════════════════════════════════════════════════════
+    private static readonly string[] _mesesAbr =
+        ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
+
+    public async Task<byte[]> DescargarPnlAsync(PnlFiltros f)
+    {
+        var resp   = await ObtenerPnlAsync(f);
+        var nodos  = resp.Data?.Nodos ?? [];
+        var año    = resp.Data?.Año ?? f.Año ?? 0;
+        var moneda = resp.Data?.Moneda ?? (f.Moneda ?? "COP").ToUpperInvariant();
+
+        // Una fila por nodo, con la jerarquía indicada por sangría en "Cuenta".
+        // Las hojas sin movimientos se dejan en blanco (no 0) para no ensuciar el análisis.
+        var filas = nodos.Select(n =>
+        {
+            var fila = new Dictionary<string, object?>
+            {
+                ["Cuenta"] = new string(' ', Math.Max(0, (n.Nivel - 1) * 3)) + n.Etiqueta,
+            };
+            var vacio = n.EsHoja && n.SinMovimientos;
+            for (int m = 0; m < 12; m++)
+                fila[_mesesAbr[m]] = vacio ? null : n.Valores[m];
+            fila["ACUM"] = vacio ? null : n.Acum;
+            return fila;
+        }).ToList();
+
+        using var ms = new MemoryStream();
+        await MiniExcel.SaveAsAsync(ms, filas, sheetName: $"P&L {año} {moneda}");
+        return ms.ToArray();
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
     // Evaluador de fórmulas: sustituye cada LineItemId por su valor y evalúa
     // la aritmética (+, −, *, /, paréntesis). Los ids se reemplazan más largos
     // primero para no confundir sufijos (EB vs EBM); el guion dentro del id no
@@ -285,7 +321,8 @@ public class PnlService : IPnlService
         if (ultimoId is null)
             return ApiResponse<PnlFiltrosDto>.Ok(new PnlFiltrosDto(), "Sin consolidación disponible.");
 
-        var baseQ = _db.MovimientosGR55.AsNoTracking().Where(m => m.ConsolidacionId == ultimoId);
+        // Filtros sobre todo el GR55 acumulado (todas las consolidaciones/meses).
+        var baseQ = _db.MovimientosGR55.AsNoTracking();
 
         var clientes  = await baseQ.Select(m => m.Cliente).Where(v => v != "").Distinct().OrderBy(v => v).ToListAsync();
         var proyectos = await baseQ.Select(m => m.CodProyecto).Where(v => v != "").Distinct().OrderBy(v => v).ToListAsync();

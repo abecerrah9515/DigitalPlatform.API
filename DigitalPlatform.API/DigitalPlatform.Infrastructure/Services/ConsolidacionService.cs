@@ -182,23 +182,26 @@ public class ConsolidacionService : IConsolidacionService
             // por lo que se ofrecen a hilos del pool con Task.Run para que corran
             // realmente en paralelo. Cada parser lee su propio archivo y solo actualiza
             // el caché de progreso (thread-safe); NINGUNO toca el DbContext.
+            // Detección por palabra clave: el archivo se ubica por una palabra clave en
+            // su nombre (ej. "gr55") en vez del nombre exacto, para tolerar renombrados.
+            // Si el nombre exacto de config existe, tiene prioridad.
             var tGr55  = Task.Run(() => ParsearArchivo(consolidacionId,
-                Path.Combine(rutaBase, _config["ConsolidacionArchivos:GR55"]               ?? "GR55.xlsx"),
+                ResolverArchivo(rutaBase, _config["ConsolidacionArchivos:GR55"],               ["gr55"]),
                 _gr55Parser.ParsearAsync, "GR55", warnings));
             var tHoras = Task.Run(() => ParsearArchivo(consolidacionId,
-                Path.Combine(rutaBase, _config["ConsolidacionArchivos:Horas"]              ?? "Horas.xlsx"),
+                ResolverArchivo(rutaBase, _config["ConsolidacionArchivos:Horas"],              ["horas"]),
                 _horasParser.ParsearAsync, "Horas", warnings));
             var tPlan  = Task.Run(() => ParsearArchivo(consolidacionId,
-                Path.Combine(rutaBase, _config["ConsolidacionArchivos:Planeacion"]         ?? "Planeacion.xlsx"),
+                ResolverArchivo(rutaBase, _config["ConsolidacionArchivos:Planeacion"],         ["proyeccion", "proyección", "planeacion", "planeación"]),
                 _planeacionParser.ParsearAsync, "Planeacion", warnings));
             var tTdc   = Task.Run(() => ParsearArchivo(consolidacionId,
-                Path.Combine(rutaBase, _config["ConsolidacionArchivos:TipoCambio"]         ?? "TDC.xlsx"),
+                ResolverArchivo(rutaBase, _config["ConsolidacionArchivos:TipoCambio"],         ["tdc", "tipo de cambio", "tipocambio"]),
                 _tipoCambioParser.ParsearAsync, "TipoCambio", warnings));
             var tMaest = Task.Run(() => ParsearArchivo(consolidacionId,
-                Path.Combine(rutaBase, _config["ConsolidacionArchivos:MaestroReferencias"] ?? "MaestroReferencias.xlsx"),
+                ResolverArchivo(rutaBase, _config["ConsolidacionArchivos:MaestroReferencias"], ["maestro"]),
                 _maestroParser.ParsearAsync, "MaestroReferencias", warnings));
             var tP26   = Task.Run(() => ParsearArchivo(consolidacionId,
-                Path.Combine(rutaBase, _config["ConsolidacionArchivos:P26"]                 ?? "P26.xlsx"),
+                ResolverArchivo(rutaBase, _config["ConsolidacionArchivos:P26"],                ["p26"]),
                 _p26Parser.ParsearAsync, "P26", warnings));
 
             await Task.WhenAll(tGr55, tHoras, tPlan, tTdc, tMaest, tP26);
@@ -218,11 +221,25 @@ public class ConsolidacionService : IConsolidacionService
             // ── Persistir tasas COP en TiposCambio ─────────────────────────
             await PersistirTiposCambioAsync(tdcRegistros ?? []);
 
-            // Lookup local de tasas para normalizar Planeación COP → USD
+            // Lookup local de tasas para normalizar valores COP → USD-equivalente.
             var tdcDict = (tdcRegistros ?? [])
                 .Where(r => r.TasaCop > 0)
                 .GroupBy(r => (r.Año, r.Mes))
                 .ToDictionary(g => g.Key, g => g.First().TasaCop);
+
+            // Última tasa disponible: proxy para períodos sin TDC registrado.
+            var ultimaTasaCop = tdcDict.Count > 0
+                ? tdcDict.OrderByDescending(kv => kv.Key.Año).ThenByDescending(kv => kv.Key.Mes).First().Value
+                : 1m;
+            if (ultimaTasaCop == 0) ultimaTasaCop = 1m;
+
+            // GR55 viene en COP (columna "en moneda de la sociedad"): convertir a
+            // USD-equivalente dividiendo por la tasa del período (o la última como proxy).
+            decimal Gr55EnUsdEquiv(decimal valorCop, int año, int mes)
+            {
+                var tasa = tdcDict.TryGetValue((año, mes), out var t) && t > 0 ? t : ultimaTasaCop;
+                return tasa != 0 ? valorCop / tasa : valorCop;
+            }
 
             // ── Lookups desde el Maestro de referencias ──────────────────────
             var cuentaClasif = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -261,7 +278,7 @@ public class ConsolidacionService : IConsolidacionService
             foreach (var r in (gr55Registros ?? []).Where(r => !string.IsNullOrWhiteSpace(r.ElementoPEP)))
             {
                 var clave = new ClaveProyecto(r.ElementoPEP.Trim(), r.Ejercicio, r.PeriodoContable);
-                var valor = r.ValorMonedaLocalCeBe;
+                var valor = Gr55EnUsdEquiv(r.ValorMonedaLocalCeBe, r.Ejercicio, r.PeriodoContable);
                 cuentaClasif.TryGetValue(r.NumeroCuenta.Trim(), out var clasif);
 
                 var prev = gr55Agg.GetValueOrDefault(clave)
@@ -284,11 +301,40 @@ public class ConsolidacionService : IConsolidacionService
                              $"(no suman ingreso ni costo): {string.Join(", ", cuentasSinClasif.OrderBy(c => c).Take(20))}" +
                              (cuentasSinClasif.Count > 20 ? "…" : ""));
 
-            // ── Agregar Planeación → IngresoPlaneado / CostoPlaneado (COP → USD) ─
-            var ultimaTasaCop = tdcDict.Count > 0
-                ? tdcDict.OrderByDescending(kv => kv.Key.Año).ThenByDescending(kv => kv.Key.Mes).First().Value
-                : 1m;
+            // ── Persistencia incremental del GR55 (generación mensual) ────────
+            // El GR55 se acumula por (Año, Mes): los meses que trae el archivo nuevo
+            // se sobreescriben, y los meses cargados en consolidaciones anteriores se
+            // conservan. Para que Proyectos y el P&L reflejen todo el histórico, se
+            // integran al ingreso/costo real (gr55Agg) los movimientos ya persistidos
+            // de los OTROS meses (los que este archivo no trae). Su Valor ya está en
+            // USD-equivalente, así que se reclasifica por cuenta pero no se re-convierte.
+            var clavesMesNuevos = (gr55Registros ?? [])
+                .Select(r => r.Ejercicio * 100 + r.PeriodoContable)
+                .Distinct()
+                .ToList();
 
+            var movPersistidosOtrosMeses = await _db.MovimientosGR55.AsNoTracking()
+                .Where(m => !clavesMesNuevos.Contains(m.Año * 100 + m.Mes))
+                .ToListAsync();
+
+            foreach (var m in movPersistidosOtrosMeses)
+            {
+                cuentaClasif.TryGetValue(m.NumeroCuenta.Trim(), out var clasif);
+                var esIngreso = clasif?.StartsWith("Ingreso", StringComparison.OrdinalIgnoreCase) == true;
+                var esCosto   = clasif?.StartsWith("costo",   StringComparison.OrdinalIgnoreCase) == true;
+                if (!esIngreso && !esCosto) continue;
+
+                var clave = new ClaveProyecto(m.CodProyecto, m.Año, m.Mes);
+                var prev  = gr55Agg.GetValueOrDefault(clave)
+                            ?? new Gr55Bucket(0m, 0m, string.Empty, string.Empty);
+                gr55Agg[clave] = prev with
+                {
+                    IngresoReal = prev.IngresoReal + (esIngreso ? m.Valor  : 0m),
+                    CostoReal   = prev.CostoReal   + (esCosto   ? -m.Valor : 0m),
+                };
+            }
+
+            // ── Agregar Planeación → IngresoPlaneado / CostoPlaneado (COP → USD) ─
             var planAgg = new Dictionary<ClaveProyecto, PlanBucket>();
             var periodosSinTasa = new HashSet<(int Año, int Mes)>();
 
@@ -369,6 +415,13 @@ public class ConsolidacionService : IConsolidacionService
                 if (!string.IsNullOrWhiteSpace(kv.Value.SocReceptora))    socRawPorProyecto.TryAdd(kv.Key.CodProyecto, kv.Value.SocReceptora);
             }
 
+            // Área directa del archivo de Horas (proyecto_area) como fallback cuando el
+            // CeBe no resuelve área — típico de proyectos que solo existen en Horas.
+            var areaHorasPorProyecto = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var r in horasRegistros ?? [])
+                if (!string.IsNullOrWhiteSpace(r.Area) && !string.IsNullOrWhiteSpace(r.Proyecto))
+                    areaHorasPorProyecto.TryAdd(r.Proyecto.Trim(), r.Area.Trim());
+
             // ── Unión de todas las claves únicas ─────────────────────────────
             var todasLasClaves = gr55Agg.Keys
                 .Union(planAgg.Keys)
@@ -422,6 +475,9 @@ public class ConsolidacionService : IConsolidacionService
                     var area = string.Empty;
                     if (!string.IsNullOrWhiteSpace(rawCebe))
                         areaDict.TryGetValue(rawCebe, out area!);
+                    // Fallback: área directa del archivo de Horas (proyecto_area)
+                    if (string.IsNullOrWhiteSpace(area))
+                        area = areaHorasPorProyecto.GetValueOrDefault(clave.CodProyecto, string.Empty);
 
                     // Responsable: wbs del período o, si falta, el del mismo proyecto en otro
                     // período (Bug 149); luego se traduce wbs → nombre completo (Bug 145).
@@ -468,6 +524,21 @@ public class ConsolidacionService : IConsolidacionService
                     _logger.LogWarning(ex, "ConsolidacionService: {Msg}", msg);
                 }
             }
+
+            // ── Refresco de datos (una sola verdad acumulada) ─────────────────
+            // Proyectos, plan P26 y árbol de cuentas se derivan de snapshots completos
+            // (Horas/Planeación/P26/Maestro llegan enteros cada corrida): se reemplazan
+            // por completo. El GR55 es incremental mensual: solo se borran los meses que
+            // trae el archivo nuevo; el resto de meses persiste. Todo en una transacción
+            // para no dejar la base a medias si algo falla.
+            await using var tx = await _db.Database.BeginTransactionAsync();
+            await _db.Proyectos.ExecuteDeleteAsync();
+            await _db.PlanesVerticalP26.ExecuteDeleteAsync();
+            await _db.CuentasPnl.ExecuteDeleteAsync();
+            if (clavesMesNuevos.Count > 0)
+                await _db.MovimientosGR55
+                    .Where(m => clavesMesNuevos.Contains(m.Año * 100 + m.Mes))
+                    .ExecuteDeleteAsync();
 
             _db.Proyectos.AddRange(proyectos);
 
@@ -540,7 +611,8 @@ public class ConsolidacionService : IConsolidacionService
                          .Where(r => !string.IsNullOrWhiteSpace(r.NumeroCuenta) && !string.IsNullOrWhiteSpace(r.ElementoPEP)))
             {
                 var clave = (r.NumeroCuenta.Trim(), r.Ejercicio, r.PeriodoContable, r.ElementoPEP.Trim());
-                movAgg[clave] = movAgg.GetValueOrDefault(clave) + r.ValorMonedaLocalCeBe;
+                movAgg[clave] = movAgg.GetValueOrDefault(clave)
+                    + Gr55EnUsdEquiv(r.ValorMonedaLocalCeBe, r.Ejercicio, r.PeriodoContable);
             }
             var movimientos = movAgg.Select(kv =>
             {
@@ -582,6 +654,7 @@ public class ConsolidacionService : IConsolidacionService
             _progressCache.TryRemove(consolidacionId, out _);
 
             await _db.SaveChangesAsync();
+            await tx.CommitAsync();
 
             _logger.LogInformation(
                 "Consolidación {Id} completada: {Exitosos} proyectos, {Fallidos} errores, estado={Estado}",
@@ -742,6 +815,40 @@ public class ConsolidacionService : IConsolidacionService
 
         await _db.SaveChangesAsync();
         _logger.LogInformation("ConsolidacionService: TiposCambio persistidos para {N} períodos.", registros.Count);
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // Helper: ubica el archivo de una fuente por PALABRA CLAVE en el nombre,
+    // para tolerar renombrados (ej. cualquier archivo con "gr55" en el nombre).
+    // Prioridad: 1) nombre exacto de config si existe; 2) primer archivo cuyo
+    // nombre contenga alguna palabra clave; 3) el nombre esperado (aunque no
+    // exista → ParsearArchivo lo reportará como "Archivo no encontrado").
+    // ════════════════════════════════════════════════════════════════════════
+    private static string ResolverArchivo(string rutaBase, string? nombreConfig, string[] palabrasClave)
+    {
+        static string Norm(string s)
+        {
+            var d = s.Normalize(System.Text.NormalizationForm.FormD);
+            var sb = new System.Text.StringBuilder(d.Length);
+            foreach (var c in d)
+                if (System.Globalization.CharUnicodeInfo.GetUnicodeCategory(c) != System.Globalization.UnicodeCategory.NonSpacingMark)
+                    sb.Append(c);
+            return sb.ToString().ToLowerInvariant();
+        }
+
+        var esperado = Path.Combine(rutaBase, nombreConfig ?? string.Empty);
+        if (!string.IsNullOrWhiteSpace(nombreConfig) && File.Exists(esperado))
+            return esperado;
+
+        if (Directory.Exists(rutaBase))
+        {
+            var claves = palabrasClave.Select(Norm).ToArray();
+            var match = Directory.EnumerateFiles(rutaBase, "*.xls*", SearchOption.TopDirectoryOnly)
+                .FirstOrDefault(f => claves.Any(k => Norm(Path.GetFileName(f)).Contains(k)));
+            if (match is not null) return match;
+        }
+
+        return esperado;
     }
 
     // ════════════════════════════════════════════════════════════════════════

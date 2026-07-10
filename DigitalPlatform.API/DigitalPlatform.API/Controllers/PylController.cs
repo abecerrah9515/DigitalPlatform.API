@@ -31,4 +31,14 @@ public class PylController : ControllerBase
         var resultado = await _pnlService.ObtenerFiltrosAsync(filtro);
         return Ok(resultado);
     }
+
+    // GET /api/pyl/descargar — exporta la tabla P&L jerárquica a Excel (HUE-08)
+    [HttpGet("descargar")]
+    public async Task<IActionResult> Descargar([FromQuery] PnlFiltros filtro)
+    {
+        var archivo = await _pnlService.DescargarPnlAsync(filtro);
+        var nombre  = $"pyl_{filtro.Año}_{(filtro.Moneda ?? "COP").ToUpperInvariant()}.xlsx";
+        return File(archivo,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", nombre);
+    }
 }

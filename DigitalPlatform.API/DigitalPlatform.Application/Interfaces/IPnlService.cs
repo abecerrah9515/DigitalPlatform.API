@@ -7,4 +7,5 @@ public interface IPnlService
 {
     Task<ApiResponse<PnlResponseDto>> ObtenerPnlAsync(PnlFiltros filtro);
     Task<ApiResponse<PnlFiltrosDto>>  ObtenerFiltrosAsync(PnlFiltros filtro);
+    Task<byte[]>                      DescargarPnlAsync(PnlFiltros filtro);
 }
