@@ -7,4 +7,6 @@ public class ComentarioDto
     public DateTime Fecha { get; set; }
     public string Texto { get; set; } = string.Empty;
     public DateTime? NuevaFechaCompromiso { get; set; }
+    public string? FacturaNumero { get; set; }
+    public string? ClienteNombre { get; set; }
 }

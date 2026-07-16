@@ -53,7 +53,7 @@ public class CarteraService : ICarteraService
             {
                 Id = i,
                 Factura = $"FAC-{2026}-{i:D4}",
-                Cliente = clientes[idx].Split(' ')[0],
+                Cliente = clientes[idx],
                 RazonSocial = clientes[idx],
                 Nit = nits[idx],
                 FechaEmision = fechaEmision,
@@ -188,6 +188,11 @@ public class CarteraService : ICarteraService
         return [.. clientes];
     }
 
+    private static List<string> SplitClientes(string? cliente) =>
+        string.IsNullOrWhiteSpace(cliente)
+            ? []
+            : cliente.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).ToList();
+
     private static string ObtenerCategoria(ReporteCarteraFactura r)
     {
         if (r.VencidoEnTiempo != 0m) return "En Tiempo";
@@ -234,8 +239,9 @@ public class CarteraService : ICarteraService
         if (cargaId is null)
         {
             var mock = MockFacturas();
-            if (!string.IsNullOrWhiteSpace(cliente))
-                mock = mock.Where(f => f.Cliente.Contains(cliente, StringComparison.OrdinalIgnoreCase)).ToList();
+            var clientes = SplitClientes(cliente);
+            if (clientes.Count > 0)
+                mock = mock.Where(f => clientes.Any(c => f.Cliente.Contains(c, StringComparison.OrdinalIgnoreCase))).ToList();
             return ApiResponse<CarteraResumenDto>.Ok(new CarteraResumenDto
             {
                 FacturasPorCobrar = mock.Where(f => f.Estado is "Pendiente" or "Vencida" or "Confirmada").Sum(f => f.Monto),
@@ -252,8 +258,12 @@ public class CarteraService : ICarteraService
             ? rows
             : rows.Where(r => r.MonedaDocumento.Equals(moneda, StringComparison.OrdinalIgnoreCase)).ToList();
 
-        if (!string.IsNullOrWhiteSpace(cliente))
-            filtrados = filtrados.Where(r => r.Deudor.Contains(cliente, StringComparison.OrdinalIgnoreCase)).ToList();
+        var clientesFiltro = SplitClientes(cliente);
+        if (clientesFiltro.Count > 0)
+            filtrados = filtrados.Where(r =>
+                clientesFiltro.Any(c => r.Deudor.Contains(c, StringComparison.OrdinalIgnoreCase)) ||
+                clientesFiltro.Any(c => (r.RazonSocial ?? "").Contains(c, StringComparison.OrdinalIgnoreCase))
+            ).ToList();
 
         return ApiResponse<CarteraResumenDto>.Ok(new CarteraResumenDto
         {
@@ -309,12 +319,22 @@ public class CarteraService : ICarteraService
     {
         var cargaId = await UltimaCargaIdAsync("reporte-cartera");
         if (cargaId is null)
-            return ApiResponse<List<CarteraClienteDto>>.Ok(MockClientes());
+        {
+            var mock = MockClientes();
+            var clientes = SplitClientes(cliente);
+            if (clientes.Count > 0)
+                mock = mock.Where(c => clientes.Any(c2 => c.Cliente.Contains(c2, StringComparison.OrdinalIgnoreCase))).ToList();
+            return ApiResponse<List<CarteraClienteDto>>.Ok(mock);
+        }
 
         var rows = await _db.ReporteCarteraFacturas.Where(r => r.CargaArchivoId == cargaId).ToListAsync();
 
-        if (!string.IsNullOrWhiteSpace(cliente))
-            rows = rows.Where(r => r.Deudor.Contains(cliente, StringComparison.OrdinalIgnoreCase)).ToList();
+        var clientesFiltro = SplitClientes(cliente);
+        if (clientesFiltro.Count > 0)
+            rows = rows.Where(r =>
+                clientesFiltro.Any(c => r.Deudor.Contains(c, StringComparison.OrdinalIgnoreCase)) ||
+                clientesFiltro.Any(c => (r.RazonSocial ?? "").Contains(c, StringComparison.OrdinalIgnoreCase))
+            ).ToList();
 
         var agrupados = rows
             .GroupBy(r => r.Deudor)
@@ -338,8 +358,9 @@ public class CarteraService : ICarteraService
         if (cargaId is null)
         {
             var mock = MockClientes();
-            if (!string.IsNullOrWhiteSpace(cliente))
-                mock = mock.Where(c => c.Nit.Contains(cliente, StringComparison.OrdinalIgnoreCase)).ToList();
+            var clientes = SplitClientes(cliente);
+            if (clientes.Count > 0)
+                mock = mock.Where(c => clientes.Any(c2 => c.Cliente.Contains(c2, StringComparison.OrdinalIgnoreCase))).ToList();
             return ApiResponse<List<CarteraClienteDto>>.Ok(mock);
         }
 
@@ -348,8 +369,12 @@ public class CarteraService : ICarteraService
         if (!string.IsNullOrWhiteSpace(moneda))
             rows = rows.Where(r => r.MonedaDocumento.Equals(moneda, StringComparison.OrdinalIgnoreCase)).ToList();
 
-        if (!string.IsNullOrWhiteSpace(cliente))
-            rows = rows.Where(r => r.Deudor.Contains(cliente, StringComparison.OrdinalIgnoreCase)).ToList();
+        var clientesFiltro = SplitClientes(cliente);
+        if (clientesFiltro.Count > 0)
+            rows = rows.Where(r =>
+                clientesFiltro.Any(c => r.Deudor.Contains(c, StringComparison.OrdinalIgnoreCase)) ||
+                clientesFiltro.Any(c => (r.RazonSocial ?? "").Contains(c, StringComparison.OrdinalIgnoreCase))
+            ).ToList();
 
         var agrupados = rows
             .GroupBy(r => string.IsNullOrWhiteSpace(r.Asignacion) ? r.Deudor : r.Asignacion)
@@ -381,6 +406,9 @@ public class CarteraService : ICarteraService
                 new() { RazonSocial = "EPM S.A.", Monto = 150000000, FacturasPendientes = 1 },
                 new() { RazonSocial = "Softtek Colombia S.A.S.", Monto = 75000000, FacturasPendientes = 1 },
             };
+            var clientesMock = SplitClientes(cliente);
+            if (clientesMock.Count > 0)
+                proyecciones = proyecciones.Where(p => clientesMock.Any(c => p.RazonSocial.Contains(c, StringComparison.OrdinalIgnoreCase))).ToList();
             return ApiResponse<List<ProyeccionPagoDto>>.Ok(proyecciones);
         }
 
@@ -388,8 +416,21 @@ public class CarteraService : ICarteraService
             .Where(r => r.CargaArchivoId == cargaId)
             .ToListAsync();
 
-        var proyeccionesDb = rows
+        var pendientes = rows
             .Where(r => !string.IsNullOrWhiteSpace(r.RazonSocial) && !string.IsNullOrWhiteSpace(r.Estado) && r.Estado.Trim().Equals("Pendiente", StringComparison.OrdinalIgnoreCase))
+            .AsEnumerable();
+
+        if (!string.IsNullOrWhiteSpace(moneda))
+            pendientes = pendientes.Where(r => r.MonedaDocumento.Equals(moneda, StringComparison.OrdinalIgnoreCase));
+
+        var clientesFiltro = SplitClientes(cliente);
+        if (clientesFiltro.Count > 0)
+            pendientes = pendientes.Where(r =>
+                clientesFiltro.Any(c => r.RazonSocial.Contains(c, StringComparison.OrdinalIgnoreCase)) ||
+                clientesFiltro.Any(c => (r.Deudor ?? "").Contains(c, StringComparison.OrdinalIgnoreCase))
+            );
+
+        var proyeccionesDb = pendientes
             .GroupBy(r => r.RazonSocial)
             .Select(g => new ProyeccionPagoDto
             {
@@ -432,8 +473,9 @@ public class CarteraService : ICarteraService
         if (cargaId is null)
         {
             var mock = MockHistoricoFacturas();
-            if (!string.IsNullOrWhiteSpace(cliente))
-                mock = mock.Where(f => f.Cliente.Contains(cliente, StringComparison.OrdinalIgnoreCase)).ToList();
+            var clientes = SplitClientes(cliente);
+            if (clientes.Count > 0)
+                mock = mock.Where(f => clientes.Any(c => f.Cliente.Contains(c, StringComparison.OrdinalIgnoreCase)) || clientes.Any(c => (f.RazonSocial ?? "").Contains(c, StringComparison.OrdinalIgnoreCase))).ToList();
             return ApiResponse<List<CarteraFacturaDto>>.Ok(mock);
         }
 
@@ -469,8 +511,12 @@ public class CarteraService : ICarteraService
             .Where(f => !string.IsNullOrWhiteSpace(f.Factura))
             .ToList();
 
-        if (!string.IsNullOrWhiteSpace(cliente))
-            facturas = facturas.Where(f => f.Cliente.Contains(cliente, StringComparison.OrdinalIgnoreCase)).ToList();
+        var clientesFiltro = SplitClientes(cliente);
+        if (clientesFiltro.Count > 0)
+            facturas = facturas.Where(f =>
+                clientesFiltro.Any(c => f.Cliente.Contains(c, StringComparison.OrdinalIgnoreCase)) ||
+                clientesFiltro.Any(c => (f.RazonSocial ?? "").Contains(c, StringComparison.OrdinalIgnoreCase))
+            ).ToList();
 
         return ApiResponse<List<CarteraFacturaDto>>.Ok(facturas);
     }
@@ -481,8 +527,9 @@ public class CarteraService : ICarteraService
         if (cargaId is null)
         {
             var mock = MockProgramacionPagos();
-            if (!string.IsNullOrWhiteSpace(cliente))
-                mock = mock.Where(p => p.Cliente.Contains(cliente, StringComparison.OrdinalIgnoreCase)).ToList();
+            var clientes = SplitClientes(cliente);
+            if (clientes.Count > 0)
+                mock = mock.Where(p => clientes.Any(c => p.Cliente.Contains(c, StringComparison.OrdinalIgnoreCase))).ToList();
             return ApiResponse<List<ProgramacionPagoDto>>.Ok(mock);
         }
 
@@ -511,8 +558,12 @@ public class CarteraService : ICarteraService
             .Where(p => !string.IsNullOrWhiteSpace(p.Factura) && !string.IsNullOrWhiteSpace(p.Cliente))
             .ToList();
 
-        if (!string.IsNullOrWhiteSpace(cliente))
-            pagos = pagos.Where(p => p.Cliente.Contains(cliente, StringComparison.OrdinalIgnoreCase)).ToList();
+        var clientesFiltro = SplitClientes(cliente);
+        if (clientesFiltro.Count > 0)
+            pagos = pagos.Where(p =>
+                clientesFiltro.Any(c => p.Cliente.Contains(c, StringComparison.OrdinalIgnoreCase)) ||
+                clientesFiltro.Any(c => p.Factura.Contains(c, StringComparison.OrdinalIgnoreCase))
+            ).ToList();
 
         return ApiResponse<List<ProgramacionPagoDto>>.Ok(pagos);
     }
@@ -551,8 +602,9 @@ public class CarteraService : ICarteraService
         if (cargaId is null)
         {
             var mock = MockFacturas();
-            if (!string.IsNullOrWhiteSpace(cliente))
-                mock = mock.Where(f => f.Cliente.Contains(cliente, StringComparison.OrdinalIgnoreCase) || f.Nit.Contains(cliente, StringComparison.OrdinalIgnoreCase)).ToList();
+            var clientes = SplitClientes(cliente);
+            if (clientes.Count > 0)
+                mock = mock.Where(f => clientes.Any(c => f.Cliente.Contains(c, StringComparison.OrdinalIgnoreCase)) || clientes.Any(c => f.Nit.Contains(c, StringComparison.OrdinalIgnoreCase))).ToList();
             if (!string.IsNullOrWhiteSpace(estado))
                 mock = mock.Where(f => f.Estado.Equals(estado, StringComparison.OrdinalIgnoreCase)).ToList();
             return ApiResponse<List<CarteraFacturaDto>>.Ok(mock);
@@ -565,18 +617,23 @@ public class CarteraService : ICarteraService
             .Where(f => !string.IsNullOrWhiteSpace(f.Factura))
             .ToList();
 
-        if (!string.IsNullOrWhiteSpace(cliente) && !string.IsNullOrWhiteSpace(nit))
+        var clientesFiltro = SplitClientes(cliente);
+        if (clientesFiltro.Count > 0 && !string.IsNullOrWhiteSpace(nit))
         {
-            var busqueda = cliente;
+            var busqueda = cliente!;
             facturas = facturas.Where(f =>
-                f.Cliente.Contains(busqueda, StringComparison.OrdinalIgnoreCase) ||
-                f.Nit.Contains(busqueda, StringComparison.OrdinalIgnoreCase)
+                clientesFiltro.Any(c => f.Cliente.Contains(c, StringComparison.OrdinalIgnoreCase)) ||
+                clientesFiltro.Any(c => (f.RazonSocial ?? "").Contains(c, StringComparison.OrdinalIgnoreCase)) ||
+                clientesFiltro.Any(c => f.Nit.Contains(c, StringComparison.OrdinalIgnoreCase))
             ).ToList();
         }
         else
         {
-            if (!string.IsNullOrWhiteSpace(cliente))
-                facturas = facturas.Where(f => f.Cliente.Contains(cliente, StringComparison.OrdinalIgnoreCase)).ToList();
+            if (clientesFiltro.Count > 0)
+                facturas = facturas.Where(f =>
+                    clientesFiltro.Any(c => f.Cliente.Contains(c, StringComparison.OrdinalIgnoreCase)) ||
+                    clientesFiltro.Any(c => (f.RazonSocial ?? "").Contains(c, StringComparison.OrdinalIgnoreCase))
+                ).ToList();
             if (!string.IsNullOrWhiteSpace(nit))
                 facturas = facturas.Where(f => f.Nit.Contains(nit, StringComparison.OrdinalIgnoreCase)).ToList();
         }
@@ -616,7 +673,7 @@ public class CarteraService : ICarteraService
         return ApiResponse<byte[]>.Ok(stream.ToArray());
     }
 
-    public async Task<ApiResponse<ComentarioDto>> AgregarComentarioAsync(int facturaId, string texto, DateTime? nuevaFechaCompromiso = null)
+    public async Task<ApiResponse<ComentarioDto>> AgregarComentarioAsync(int facturaId, string texto, DateTime? nuevaFechaCompromiso = null, string? facturaNumero = null, string? clienteNombre = null)
     {
         var cargaId = await UltimaCargaIdAsync("reporte-cartera");
         if (cargaId is null)
@@ -629,6 +686,8 @@ public class CarteraService : ICarteraService
                 Fecha = DateTime.Now,
                 Texto = texto,
                 NuevaFechaCompromiso = nuevaFechaCompromiso,
+                FacturaNumero = facturaNumero,
+                ClienteNombre = clienteNombre,
             });
         }
 
@@ -640,6 +699,8 @@ public class CarteraService : ICarteraService
             Fecha = DateTime.UtcNow,
             Texto = texto,
             NuevaFechaCompromiso = nuevaFechaCompromiso,
+            FacturaNumero = facturaNumero,
+            ClienteNombre = clienteNombre,
         };
 
         _db.ComentariosFacturas.Add(entity);
@@ -664,6 +725,8 @@ public class CarteraService : ICarteraService
             Fecha = entity.Fecha,
             Texto = entity.Texto,
             NuevaFechaCompromiso = entity.NuevaFechaCompromiso,
+            FacturaNumero = entity.FacturaNumero,
+            ClienteNombre = entity.ClienteNombre,
         });
     }
 
@@ -693,6 +756,8 @@ public class CarteraService : ICarteraService
             Fecha = e.Fecha,
             Texto = e.Texto,
             NuevaFechaCompromiso = e.NuevaFechaCompromiso,
+            FacturaNumero = e.FacturaNumero,
+            ClienteNombre = e.ClienteNombre,
         }).ToList();
 
         return ApiResponse<List<ComentarioDto>>.Ok(result);
@@ -990,15 +1055,36 @@ public class CarteraService : ICarteraService
         return Task.FromResult(ApiResponse<string>.Ok($"Directorio de {empresa} actualizado correctamente."));
     }
 
-    public Task<ApiResponse<List<FechaReprogramadaDto>>> GetFechasReprogramadasAsync()
+    public async Task<ApiResponse<List<FechaReprogramadaDto>>> GetFechasReprogramadasAsync()
     {
-        var reprogramadas = new List<FechaReprogramadaDto>
+        var cargaId = await UltimaCargaIdAsync("reporte-cartera");
+        if (cargaId is null)
         {
-            new() { Factura = "F-2024-001", Cliente = "Bancolombia", NuevaFechaCompromiso = new DateTime(2026, 4, 15), Texto = "Se acordó nuevo plazo hasta el 15 de abril.", Autor = "Carlos Méndez", Fecha = new DateTime(2026, 3, 1, 14, 0, 0) },
-            new() { Factura = "F-2024-003", Cliente = "Davivienda", NuevaFechaCompromiso = new DateTime(2026, 3, 30), Texto = "Cliente solicitó extensión de plazo por problemas de flujo de caja.", Autor = "María Torres", Fecha = new DateTime(2026, 2, 28, 10, 30, 0) },
-            new() { Factura = "F-2024-007", Cliente = "Grupo Éxito", NuevaFechaCompromiso = new DateTime(2026, 5, 10), Texto = "Se reprograma pago según nuevo acuerdo comercial.", Autor = "Andrés García", Fecha = new DateTime(2026, 3, 5, 16, 0, 0) },
-        };
-        return Task.FromResult(ApiResponse<List<FechaReprogramadaDto>>.Ok(reprogramadas));
+            var reprogramadas = new List<FechaReprogramadaDto>
+            {
+                new() { Factura = "F-2024-001", Cliente = "Bancolombia", NuevaFechaCompromiso = new DateTime(2026, 4, 15), Texto = "Se acordó nuevo plazo hasta el 15 de abril.", Autor = "Carlos Méndez", Fecha = new DateTime(2026, 3, 1, 14, 0, 0) },
+                new() { Factura = "F-2024-003", Cliente = "Davivienda", NuevaFechaCompromiso = new DateTime(2026, 3, 30), Texto = "Cliente solicitó extensión de plazo por problemas de flujo de caja.", Autor = "María Torres", Fecha = new DateTime(2026, 2, 28, 10, 30, 0) },
+                new() { Factura = "F-2024-007", Cliente = "Grupo Éxito", NuevaFechaCompromiso = new DateTime(2026, 5, 10), Texto = "Se reprograma pago según nuevo acuerdo comercial.", Autor = "Andrés García", Fecha = new DateTime(2026, 3, 5, 16, 0, 0) },
+            };
+            return ApiResponse<List<FechaReprogramadaDto>>.Ok(reprogramadas);
+        }
+
+        var comments = await _db.ComentariosFacturas
+            .Where(c => c.CargaArchivoId == cargaId && c.NuevaFechaCompromiso != null)
+            .OrderByDescending(c => c.Fecha)
+            .ToListAsync();
+
+        var resultado = comments.Select(c => new FechaReprogramadaDto
+        {
+            Factura = c.FacturaNumero ?? $"F-{c.FacturaId:D3}",
+            Cliente = c.ClienteNombre ?? "Cliente",
+            NuevaFechaCompromiso = c.NuevaFechaCompromiso!.Value,
+            Texto = c.Texto,
+            Autor = c.Autor,
+            Fecha = c.Fecha,
+        }).ToList();
+
+        return ApiResponse<List<FechaReprogramadaDto>>.Ok(resultado);
     }
 
     public Task<ApiResponse<string>> EnviarNotificacionBRMAsync(NotificacionBRMDto notificacion)

@@ -17,7 +17,7 @@ public interface ICarteraService
     Task<ApiResponse<string>> EnviarAlertaAsync(string tipo, string cliente);
     Task<ApiResponse<List<CarteraFacturaDto>>> GetFacturasAsync(string? cliente = null, string? nit = null, string? estado = null);
     Task<ApiResponse<byte[]>> DescargarReporteFacturasAsync(string? cliente = null, string? nit = null, string? estado = null);
-    Task<ApiResponse<ComentarioDto>> AgregarComentarioAsync(int facturaId, string texto, DateTime? nuevaFechaCompromiso = null);
+    Task<ApiResponse<ComentarioDto>> AgregarComentarioAsync(int facturaId, string texto, DateTime? nuevaFechaCompromiso = null, string? facturaNumero = null, string? clienteNombre = null);
     Task<ApiResponse<List<ComentarioDto>>> GetComentariosAsync(int facturaId);
     Task<ApiResponse<List<NotificacionEnviadaDto>>> GetNotificacionesEnviadasAsync(string? estado = null, string? cliente = null);
     Task<ApiResponse<string>> EnviarRecordatorioAsync(List<int> facturasIds);

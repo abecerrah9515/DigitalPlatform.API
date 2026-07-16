@@ -138,7 +138,13 @@ public class CarteraController : ControllerBase
             if (DateTime.TryParse(fechaProp.GetString(), out var dt))
                 nuevaFecha = DateTime.SpecifyKind(dt, DateTimeKind.Utc);
         }
-        var resultado = await _carteraService.AgregarComentarioAsync(facturaId, texto, nuevaFecha);
+        var facturaNumero = body.TryGetProperty("facturaNumero", out var facProp) && facProp.ValueKind == JsonValueKind.String
+            ? facProp.GetString()
+            : null;
+        var clienteNombre = body.TryGetProperty("clienteNombre", out var cliProp) && cliProp.ValueKind == JsonValueKind.String
+            ? cliProp.GetString()
+            : null;
+        var resultado = await _carteraService.AgregarComentarioAsync(facturaId, texto, nuevaFecha, facturaNumero, clienteNombre);
         return Ok(resultado);
     }
 

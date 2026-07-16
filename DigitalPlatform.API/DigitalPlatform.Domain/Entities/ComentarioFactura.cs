@@ -9,6 +9,8 @@ public class ComentarioFactura
     public DateTime Fecha { get; set; }
     public string Texto { get; set; } = string.Empty;
     public DateTime? NuevaFechaCompromiso { get; set; }
+    public string? FacturaNumero { get; set; }
+    public string? ClienteNombre { get; set; }
 
     public CargaArchivo CargaArchivo { get; set; } = null!;
 }

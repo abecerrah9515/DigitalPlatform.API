@@ -187,6 +187,8 @@ public class ApplicationDbContext : DbContext
             entity.Property(e => e.Autor).HasMaxLength(200).IsRequired();
             entity.Property(e => e.Texto).IsRequired();
             entity.Property(e => e.NuevaFechaCompromiso).HasColumnType("timestamp with time zone");
+            entity.Property(e => e.FacturaNumero).HasMaxLength(100);
+            entity.Property(e => e.ClienteNombre).HasMaxLength(200);
             entity.HasOne(e => e.CargaArchivo)
                   .WithMany()
                   .HasForeignKey(e => e.CargaArchivoId)
