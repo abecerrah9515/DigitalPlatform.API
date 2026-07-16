@@ -22,6 +22,7 @@ builder.Services.AddScoped<IP26Parser, P26Parser>();
 // Services
 builder.Services.AddScoped<IConsolidacionService, ConsolidacionService>();
 builder.Services.AddScoped<IProyectoService, ProyectoService>();
+builder.Services.AddScoped<IPnlService, PnlService>();
 
 // Permitir archivos grandes en uploads multipart (5 archivos, hasta ~512 MB en total)
 builder.Services.Configure<FormOptions>(o =>

@@ -49,11 +49,14 @@ public class ProyectoService : IProyectoService
     {
         var estadosValidos = new[] { EstadoConsolidacion.Exitoso, EstadoConsolidacion.ParcialmenteExitoso };
 
-        var ultimoId = await _db.ConsolidacionLogs
-            .Where(l => estadosValidos.Contains(l.Estado))
-            .OrderByDescending(l => l.FechaInicio)
-            .Select(l => (int?)l.Id)
-            .FirstOrDefaultAsync();
+        // Consolidación a consultar: la indicada en el filtro (para ver corridas
+        // anteriores) o, por defecto, la más reciente exitosa/parcialmente exitosa.
+        var ultimoId = f.ConsolidacionId
+            ?? await _db.ConsolidacionLogs
+                .Where(l => estadosValidos.Contains(l.Estado))
+                .OrderByDescending(l => l.FechaInicio)
+                .Select(l => (int?)l.Id)
+                .FirstOrDefaultAsync();
 
         if (ultimoId is null)
         {
@@ -179,18 +182,13 @@ public class ProyectoService : IProyectoService
     private static decimal Semaforo_Ingreso(decimal real, decimal plan) =>
         real >= plan ? 0m : 1m; // 0=Verde, 1=Rojo (helper numérico)
 
-    // ── Período cerrado / valor efectivo (HUE-04, Bug 139) ───────────────────
-    // Un período está cerrado si ya finalizó respecto a la fecha actual.
-    // Para períodos cerrados se usa el valor REAL; para no cerrados, el PROYECTADO.
-    private static bool EsPeriodoCerrado(int año, int mes)
-    {
-        var hoy = DateTime.Now;
-        return año < hoy.Year || (año == hoy.Year && mes < hoy.Month);
-    }
+    // ── Valor efectivo (HUG-03) ──────────────────────────────────────────────
+    // Se muestra el valor REAL cuando existe; en ausencia de real, el PROYECTADO
+    // (archivo de Planeación). "Existe real" = distinto de cero para ese período.
     private static decimal IngresoEfectivo(Flat d) =>
-        EsPeriodoCerrado(d.Año, d.Mes) ? d.IngresoReal : d.IngresoPlaneado;
+        d.IngresoReal != 0 ? d.IngresoReal : d.IngresoPlaneado;
     private static decimal CostoEfectivo(Flat d) =>
-        EsPeriodoCerrado(d.Año, d.Mes) ? d.CostoReal : d.CostoPlaneado;
+        d.CostoReal != 0 ? d.CostoReal : d.CostoPlaneado;
 
     // ════════════════════════════════════════════════════════════════════════
     // GET /api/kpis — 5 indicadores (Task 16)
@@ -246,6 +244,14 @@ public class ProyectoService : IProyectoService
         var comparaAplica = !(filtro.Cliente?.Length > 0)
                          && !(filtro.CodProyecto?.Length > 0)
                          && !(filtro.Area?.Length > 0);
+
+        // Subtítulo aclaratorio del nivel de comparación (el plan P26 es por vertical).
+        // Evita interpretar mal la diferencia al filtrar por cliente/proyecto (feedback QA).
+        var subtituloReferencia = comparaAplica
+            ? (filtro.Vertical?.Length > 0
+                ? "Comparación respecto al plan total de la Vertical"
+                : "Vista portafolio completo — filtre para segmentar")
+            : "El plan es por vertical: no se compara a nivel Cliente/Proyecto/Área";
 
         var ingresoPlan = 0m;
         var costoPlan   = 0m;
@@ -333,6 +339,7 @@ public class ProyectoService : IProyectoService
                 Tendencia  = !comparaAplica ? "Neutro" : ingresoReal >= ingresoPlan ? "Arriba" : "Abajo",
                 BadgeTexto = !comparaAplica ? "—"      : ingresoReal >= ingresoPlan ? "Sobre plan" : "Bajo plan",
                 Subtitulo  = subtituloRango,
+                SubtituloReferencia = subtituloReferencia,
             },
             MargenGM = new KpiItemDto
             {
@@ -343,6 +350,7 @@ public class ProyectoService : IProyectoService
                 Tendencia  = !comparaAplica ? "Neutro" : gmDelta >= 0 ? "Arriba" : "Abajo",
                 BadgeTexto = !comparaAplica ? "—" : $"{(gmDelta >= 0 ? "▲" : "▼")} {Math.Abs(gmDelta)} pp vs plan",
                 Subtitulo  = subtituloGM,
+                SubtituloReferencia = subtituloReferencia,
             },
             HorasEntregadas = new KpiItemDto
             {
@@ -371,6 +379,7 @@ public class ProyectoService : IProyectoService
                 Tendencia  = !comparaAplica ? "Neutro" : cumplimiento >= 100 ? "Arriba" : "Abajo",
                 BadgeTexto = !comparaAplica ? "—" : $"{(cumplDelta >= 0 ? "▲ +" : "▼ ")}{cumplDelta}%",
                 Subtitulo  = subtituloRango,
+                SubtituloReferencia = subtituloReferencia,
             },
         });
     }
@@ -557,9 +566,11 @@ public class ProyectoService : IProyectoService
             ? await CargarPlanP26PorPeriodoAsync(filtro)
             : new Dictionary<(int Año, int Mes), (decimal Ingreso, decimal Costo)>();
 
+        // Las barras muestran el valor efectivo (real si existe, si no proyectado);
+        // la línea "Plan" es P26 (feedback QA / HUE-05).
         var realPorPeriodo = datosFiltrados
             .GroupBy(d => (d.Año, d.Mes))
-            .ToDictionary(g => g.Key, g => g.Sum(d => d.IngresoReal * d.Factor));
+            .ToDictionary(g => g.Key, g => g.Sum(d => IngresoEfectivo(d) * d.Factor));
 
         // Siempre 3 meses consecutivos (HUE-05), aunque algún mes no tenga real o plan.
         var periodos = periodos3
@@ -875,6 +886,7 @@ public class ProyectoService : IProyectoService
             Vertical    = filtro.Industria   != null  ? [filtro.Industria]         : null,
             Area        = filtro.Area        != null  ? [filtro.Area]              : null,
             Pais        = filtro.Sociedad    != null  ? [filtro.Sociedad]          : null,
+            ConsolidacionId = filtro.ConsolidacionId,
         };
 
         var (datos, hayDatos) = await CargarDatosAsync(f);

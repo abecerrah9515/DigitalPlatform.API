@@ -25,6 +25,19 @@ public class ProyectosController : ControllerBase
         return Ok(resultado);
     }
 
+    // GET api/proyectos/consolidacion/{consolidacionId}
+    // Consulta la tabla de proyectos de una consolidación específica (corrida anterior).
+    // Admite los mismos filtros y paginación que el endpoint principal.
+    [HttpGet("consolidacion/{consolidacionId:int}")]
+    public async Task<ActionResult<ApiResponse<PagedResult<ProyectoDto>>>> ObtenerProyectosPorConsolidacion(
+        int consolidacionId,
+        [FromQuery] ProyectoFiltroDto filtro)
+    {
+        filtro.ConsolidacionId = consolidacionId;
+        var resultado = await _proyectoService.ObtenerProyectosAsync(filtro);
+        return Ok(resultado);
+    }
+
     // GET api/proyectos/kpis
     [HttpGet("kpis")]
     public async Task<ActionResult<ApiResponse<KpisDto>>> ObtenerKpis(

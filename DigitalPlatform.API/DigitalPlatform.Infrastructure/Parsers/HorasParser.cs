@@ -60,6 +60,13 @@ public class HorasParser : IHorasParser
                     ? rawProyecto.Split(new[] { " - " }, 2, StringSplitOptions.None)[0].Trim()
                     : rawProyecto.Trim();
 
+                // proyecto_area: "90702 - AMS" → "AMS"; "---" / " - " → vacío
+                var rawArea = ExcelParserHelper.GetString(row, "proyecto_area");
+                var area = rawArea.Contains(" - ")
+                    ? rawArea.Split(new[] { " - " }, 2, StringSplitOptions.None)[^1].Trim()
+                    : string.Empty;
+                if (area is "---" or "-") area = string.Empty;
+
                 resultado.Add(new RegistroHorasDto
                 {
                     TrabajadorId = ExcelParserHelper.GetString(row, "trabajador_id_softtek"),
@@ -68,6 +75,7 @@ public class HorasParser : IHorasParser
                     Proyecto     = proyecto,
                     Sociedad     = ExcelParserHelper.GetString(row, "proyecto_sociedad_fi"),
                     Industria    = ExcelParserHelper.GetString(row, "proyecto_industria"),
+                    Area         = area,
                     Año          = ExcelParserHelper.GetInt(row, "ano"),
                     Mes          = ExcelParserHelper.GetInt(row, "mes"),
                     Horas        = ExcelParserHelper.GetDecimal(row, "horas"),

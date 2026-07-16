@@ -14,4 +14,8 @@ public record ProyectoFiltros
     public string[]? Vertical   { get; set; } // campo Vertical en Proyectos
     public string[]? Area       { get; set; }
     public string[]? Pais       { get; set; } // campo Pais en Proyectos (UI: "Sociedad")
+
+    // Consolidación a consultar. Si es null → la más reciente (comportamiento por defecto).
+    // Permite ver los datos de una corrida anterior por su Id.
+    public int?      ConsolidacionId { get; set; }
 }
