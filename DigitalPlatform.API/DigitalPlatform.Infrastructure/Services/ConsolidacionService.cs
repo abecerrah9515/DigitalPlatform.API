@@ -150,31 +150,31 @@ public class ConsolidacionService : IConsolidacionService
     // ════════════════════════════════════════════════════════════════════════
     public async Task IniciarConsolidacionAsync(int consolidacionId)
     {
-        var log = await _db.ConsolidacionLogs.FindAsync(consolidacionId);
-        if (log is null)
-        {
-            _logger.LogError("ConsolidacionService: log {Id} no encontrado.", consolidacionId);
-            return;
-        }
-
-        // Asegurar que la caché existe aunque CrearLogAsync haya sido llamado desde otro scope
-        if (!_progressCache.ContainsKey(consolidacionId))
-        {
-            _progressCache[consolidacionId] = new List<FuenteEstadoDto>
-            {
-                new() { Archivo = "GR55",              Estado = "Pendiente" },
-                new() { Archivo = "Horas",             Estado = "Pendiente" },
-                new() { Archivo = "Planeacion",        Estado = "Pendiente" },
-                new() { Archivo = "TipoCambio",        Estado = "Pendiente" },
-                new() { Archivo = "MaestroReferencias",Estado = "Pendiente" },
-                new() { Archivo = "P26",               Estado = "Pendiente" },
-            };
-        }
-
         var warnings = new List<string>();
 
         try
         {
+            var log = await _db.ConsolidacionLogs.FindAsync(consolidacionId);
+            if (log is null)
+            {
+                _logger.LogError("ConsolidacionService: log {Id} no encontrado.", consolidacionId);
+                return;
+            }
+
+            // Asegurar que la caché existe aunque CrearLogAsync haya sido llamado desde otro scope
+            if (!_progressCache.ContainsKey(consolidacionId))
+            {
+                _progressCache[consolidacionId] = new List<FuenteEstadoDto>
+                {
+                    new() { Archivo = "GR55",              Estado = "Pendiente" },
+                    new() { Archivo = "Horas",             Estado = "Pendiente" },
+                    new() { Archivo = "Planeacion",        Estado = "Pendiente" },
+                    new() { Archivo = "TipoCambio",        Estado = "Pendiente" },
+                    new() { Archivo = "MaestroReferencias",Estado = "Pendiente" },
+                    new() { Archivo = "P26",               Estado = "Pendiente" },
+                };
+            }
+
             var rutaBase = _config["ConsolidacionArchivos:RutaBase"] ?? string.Empty;
 
             // ── Parsear las 6 fuentes EN PARALELO ────────────────────────────
@@ -201,7 +201,15 @@ public class ConsolidacionService : IConsolidacionService
                 Path.Combine(rutaBase, _config["ConsolidacionArchivos:P26"]                 ?? "P26.xlsx"),
                 _p26Parser.ParsearAsync, "P26", warnings));
 
-            await Task.WhenAll(tGr55, tHoras, tPlan, tTdc, tMaest, tP26);
+            var timeout = TimeSpan.FromMinutes(30);
+            var allParsers = Task.WhenAll(tGr55, tHoras, tPlan, tTdc, tMaest, tP26);
+            if (await Task.WhenAny(allParsers, Task.Delay(timeout)) != allParsers)
+            {
+                var msg = $"La consolidación superó el tiempo máximo de espera ({timeout.TotalMinutes} minutos).";
+                warnings.Add(msg);
+                _logger.LogWarning("ConsolidacionService: {Msg}", msg);
+                throw new TimeoutException(msg);
+            }
 
             var gr55Registros       = tGr55.Result;
             var horasRegistros      = tHoras.Result;
@@ -543,19 +551,30 @@ public class ConsolidacionService : IConsolidacionService
         {
             _logger.LogError(ex, "ConsolidacionService: error fatal en consolidación {Id}", consolidacionId);
 
-            var logFatal = await _db.ConsolidacionLogs.FindAsync(consolidacionId);
-            if (logFatal is not null)
+            try
             {
-                logFatal.FechaFin = DateTime.UtcNow;
-                logFatal.Estado   = EstadoConsolidacion.Fallido;
-                logFatal.Errores  = JsonSerializer.Serialize(new[] { ex.Message });
+                // Limpiar el tracker para evitar que intente guardar entidades
+                // huérfanas que quedaron trackeadas (Added) antes del error.
+                _db.ChangeTracker.Clear();
 
-                // Guardar fuentes con error y limpiar caché
-                if (_progressCache.TryGetValue(consolidacionId, out var fuentesError))
-                    logFatal.FuentesJson = JsonSerializer.Serialize(fuentesError);
-                _progressCache.TryRemove(consolidacionId, out _);
+                var logFatal = await _db.ConsolidacionLogs.FindAsync(consolidacionId);
+                if (logFatal is not null)
+                {
+                    logFatal.FechaFin = DateTime.UtcNow;
+                    logFatal.Estado   = EstadoConsolidacion.Fallido;
+                    logFatal.Errores  = JsonSerializer.Serialize(new[] { ex.Message });
 
-                await _db.SaveChangesAsync();
+                    // Guardar fuentes con error y limpiar caché
+                    if (_progressCache.TryGetValue(consolidacionId, out var fuentesError))
+                        logFatal.FuentesJson = JsonSerializer.Serialize(fuentesError);
+                    _progressCache.TryRemove(consolidacionId, out _);
+
+                    await _db.SaveChangesAsync();
+                }
+            }
+            catch (Exception ex2)
+            {
+                _logger.LogError(ex2, "ConsolidacionService: error al registrar fallo en BD para {Id}", consolidacionId);
             }
         }
     }
@@ -568,6 +587,16 @@ public class ConsolidacionService : IConsolidacionService
         var log = await _db.ConsolidacionLogs.FindAsync(consolidacionId);
         if (log is null)
             return ApiResponse<ConsolidacionEstadoDto>.Fail($"Consolidación {consolidacionId} no encontrada.");
+
+        // Auto-recuperación: si la BD dice "Procesando" pero no hay caché en vivo
+        // ni FechaFin, es porque la app se reinició durante el procesamiento.
+        if (log.Estado == EstadoConsolidacion.Procesando && !log.FechaFin.HasValue && !_progressCache.ContainsKey(consolidacionId))
+        {
+            log.FechaFin = DateTime.UtcNow;
+            log.Estado   = EstadoConsolidacion.Fallido;
+            log.Errores  = JsonSerializer.Serialize(new[] { "La aplicación se reinició durante la consolidación." });
+            await _db.SaveChangesAsync();
+        }
 
         List<string> errores = [];
         if (!string.IsNullOrWhiteSpace(log.Errores))
