@@ -16,12 +16,13 @@ public class GR55Parser : IGR55Parser
     private static readonly Regex WbsSufijoRegex =
         new(@"-\d+$", RegexOptions.Compiled);
 
-    // Columnas mínimas requeridas según HUE-02 (normalizadas: sin tilde, minúsculas)
+    // Columnas mínimas requeridas según HUE-02 (normalizadas: sin tilde, minúsculas).
+    // El valor se toma de "en moneda de la sociedad" (en COP para GR55).
     private static readonly string[] _columnasRequeridas =
     [
         "soc.receptora", "periodo contable", "ejercicio", "numero de cuenta",
         "denominacion", "elemento pep", "centro de beneficio", "texto",
-        "en moneda local centro de beneficio", "clave moneda ml cebe"
+        "en moneda de la sociedad", "clave moneda moneda sociedad"
     ];
 
     public GR55Parser(ILogger<GR55Parser> logger) => _logger = logger;
@@ -85,8 +86,10 @@ public class GR55Parser : IGR55Parser
                         ElementoPEP          = elementoPep,
                         CentroBeneficio      = ExcelParserHelper.GetString(row, "centro de beneficio"),
                         Texto                = texto,
-                        ValorMonedaLocalCeBe = ExcelParserHelper.GetDecimalRequired(row, "en moneda local centro de beneficio") * -1,
-                        ClaveMonedaLocalCeBe = ExcelParserHelper.GetString(row, "clave moneda ml cebe"),
+                        // Valor en COP (moneda de la sociedad), con el signo invertido (HUE-02).
+                        // La consolidación lo convierte a USD-equivalente dividiendo por la tasa.
+                        ValorMonedaLocalCeBe = ExcelParserHelper.GetDecimal(row, "en moneda de la sociedad") * -1,
+                        ClaveMonedaLocalCeBe = ExcelParserHelper.GetString(row, "clave moneda moneda sociedad"),
                     });
                     if (resultado.Count % 100 == 0) onProgress?.Invoke(resultado.Count);
                 }

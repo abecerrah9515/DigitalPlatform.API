@@ -18,13 +18,15 @@ builder.Services.AddScoped<IHorasParser, HorasParser>();
 builder.Services.AddScoped<IPlaneacionParser, PlaneacionParser>();
 builder.Services.AddScoped<ITipoCambioParser, TipoCambioParser>();
 builder.Services.AddScoped<IMaestroReferenciasParser, MaestroReferenciasParser>();
- 
+builder.Services.AddScoped<IP26Parser, P26Parser>();
+
 // Services
 builder.Services.AddScoped<IConsolidacionService, ConsolidacionService>();
 builder.Services.AddScoped<IProyectoService, ProyectoService>();
 builder.Services.AddScoped<ICarteraService, CarteraService>();
 builder.Services.AddScoped<ICargaArchivoService, CargaArchivoService>();
 builder.Services.AddScoped<IDepartamentoFinanzasService, DepartamentoFinanzasService>();
+builder.Services.AddScoped<IPnlService, PnlService>();
 
  
 // Permitir archivos grandes en uploads multipart (5 archivos, hasta ~512 MB en total)
@@ -53,7 +55,13 @@ builder.Services.AddSwaggerGen(c =>
 });
  
 var app = builder.Build();
- 
+
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+    db.Database.Migrate();
+}
+
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();

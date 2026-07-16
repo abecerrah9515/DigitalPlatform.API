@@ -1,0 +1,16 @@
+**/bin/
+**/obj/
+**/.vs/
+**/.vscode/
+**/.git/
+**/.github/
+.claude/
+**/*.user
+**/*.suo
+**/*.sln.cache
+**/*.log
+Dockerfile
+docker-compose*.yml
+.dockerignore
+.gitignore
+README.md

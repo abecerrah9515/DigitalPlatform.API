@@ -48,11 +48,12 @@ public class TendenciaResponseDto
 public class TendenciaPuntoDto
 {
     public string  Periodo          { get; set; } = string.Empty; // "2025-03"
-    public decimal IngresoReal      { get; set; }
-    public decimal IngresoPlaneado  { get; set; }
-    public decimal Variacion        { get; set; }
-    public decimal PctCumplimiento  { get; set; }
-    public bool    SinPlan          { get; set; } // true cuando no hay ingreso planeado para el período
+    public decimal IngresoReal      { get; set; }                 // real ejecutado (GR55) — línea continua gruesa
+    public decimal IngresoPlan      { get; set; }                 // plan de referencia P26 — línea continua
+    public decimal IngresoPlaneado  { get; set; }                 // proyectado (Planeación) — línea discontinua
+    public decimal Variacion        { get; set; }                 // real vs plan P26
+    public decimal PctCumplimiento  { get; set; }                 // real / plan P26
+    public bool    SinPlan          { get; set; } // true cuando no hay plan P26 para el período
 }
 
 // ── GET /api/graficas/top-clientes-horas ────────────────────────────────────

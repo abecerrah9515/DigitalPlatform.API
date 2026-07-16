@@ -123,9 +123,14 @@ public class ConsolidacionController : ControllerBase
     [RequestSizeLimit(536_870_912)]
     [RequestFormLimits(MultipartBodyLengthLimit = 536_870_912)]
     public async Task<ActionResult<ApiResponse<object>>> Upload(
-        IFormFile gr55, IFormFile horas, IFormFile planeacion,
-        IFormFile tipoCambio, IFormFile maestroReferencias)
+        IFormFile gr55,
+        IFormFile horas,
+        IFormFile planeacion,
+        IFormFile tipoCambio,
+        IFormFile maestroReferencias,
+        IFormFile? p26 = null)
     {
+        // ── 1. Validar que los archivos requeridos llegaron ──────────────────
         var faltantes = new List<string>();
         if (gr55               is null) faltantes.Add("gr55");
         if (horas              is null) faltantes.Add("horas");
@@ -136,11 +141,16 @@ public class ConsolidacionController : ControllerBase
             return BadRequest(ApiResponse<object>.Fail(
                 $"Faltan archivos: {string.Join(", ", faltantes)}."));
 
+        // ── 2. Validar extensión .xlsx ───────────────────────────────────────
+        // P26 es opcional durante la transición: si no se envía, se conserva el
+        // P26.xlsx existente en el repositorio.
         var archivos = new Dictionary<string, IFormFile>
         {
             ["gr55"] = gr55!, ["horas"] = horas!, ["planeacion"] = planeacion!,
             ["tipoCambio"] = tipoCambio!, ["maestroReferencias"] = maestroReferencias!,
         };
+        if (p26 is not null) archivos["p26"] = p26;
+
         var noXlsx = archivos
             .Where(kv => !Path.GetExtension(kv.Value.FileName).Equals(".xlsx", StringComparison.OrdinalIgnoreCase))
             .Select(kv => kv.Key).ToList();
@@ -158,6 +168,7 @@ public class ConsolidacionController : ControllerBase
             ["planeacion"]         = _config["ConsolidacionArchivos:Planeacion"]         ?? "Planeacion.xlsx",
             ["tipoCambio"]         = _config["ConsolidacionArchivos:TipoCambio"]         ?? "TDC.xlsx",
             ["maestroReferencias"] = _config["ConsolidacionArchivos:MaestroReferencias"] ?? "MaestroReferencias.xlsx",
+            ["p26"]                = _config["ConsolidacionArchivos:P26"]                ?? "P26.xlsx",
         };
         try
         {

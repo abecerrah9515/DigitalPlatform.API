@@ -1,7 +1,5 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
-using Npgsql;
-using NpgsqlTypes;
 using DigitalPlatform.Application.Common;
 using DigitalPlatform.Application.DTOs.Consolidacion;
 using DigitalPlatform.Application.DTOs.Fuentes;
@@ -40,6 +38,7 @@ public class ConsolidacionService : IConsolidacionService
     private readonly IPlaneacionParser _planeacionParser;
     private readonly ITipoCambioParser _tipoCambioParser;
     private readonly IMaestroReferenciasParser _maestroParser;
+    private readonly IP26Parser _p26Parser;
     private readonly IConfiguration _config;
     private readonly ILogger<ConsolidacionService> _logger;
 
@@ -50,6 +49,7 @@ public class ConsolidacionService : IConsolidacionService
         IPlaneacionParser planeacionParser,
         ITipoCambioParser tipoCambioParser,
         IMaestroReferenciasParser maestroParser,
+        IP26Parser p26Parser,
         IConfiguration config,
         ILogger<ConsolidacionService> logger)
     {
@@ -59,8 +59,44 @@ public class ConsolidacionService : IConsolidacionService
         _planeacionParser = planeacionParser;
         _tipoCambioParser = tipoCambioParser;
         _maestroParser = maestroParser;
+        _p26Parser     = p26Parser;
         _config        = config;
         _logger        = logger;
+    }
+
+    // ── Plan P26 aggregation bucket (por Vertical × Año × Mes) ───────────────
+    private record P26Bucket(decimal IngresoPlan, decimal CostoPlan);
+
+    // Clasificación de Task del Arch.P26 → ingreso/costo (HUE-02)
+    private static readonly HashSet<string> _p26TasksIngreso = new(StringComparer.OrdinalIgnoreCase)
+        { "1.3.1 Service Revenue", "1.3.2 Product Revenue", "1.3.3 Product Margin", "2.5.1 Product Cost" };
+    private static readonly HashSet<string> _p26TasksCosto = new(StringComparer.OrdinalIgnoreCase)
+        { "2.1.1 Labor Cost", "2.2.1 Traveling Cost", "2.3.1 Infrastructure Cost", "2.4.1 Other Direct Cost" };
+
+    // Mapeo Source.Name (P26) → Cód.Industria del maestro. La vertical final se
+    // resuelve con el mismo industriaDict que usa Proyecto, garantizando que el
+    // string de vertical coincida exactamente para la comparación (Bug/HU P26).
+    private static readonly Dictionary<string, string> _p26SourceToCodIndustria = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["01BFS"]             = "Z01", // Banca y finanzas
+        ["02Transportation"]  = "Z06", // Transporte
+        ["03Industrial"]      = "Z08", // Industrial
+        ["04Retail"]          = "Z03", // Retail
+        ["05HighTech"]        = "Z05", // Tecnología
+        ["06Healthcare"]      = "Z10", // H&l
+        ["07CPG"]             = "Z02", // Consumo masivo
+        ["08NaturalResources"]= "Z09", // Recursos Naturales
+        ["09Hospitality"]     = "Z07", // Servicios entretenimiento
+        ["10Government"]      = "Z04", // Gobierno
+        ["11Other"]           = "Z00", // Otros
+    };
+
+    // "01BFS.xlsx" → "01BFS"; tolera mayúsculas/minúsculas y la extensión.
+    private static string NormalizarSourceP26(string sourceName)
+    {
+        var s = (sourceName ?? string.Empty).Trim();
+        var dot = s.LastIndexOf('.');
+        return dot > 0 ? s[..dot] : s;
     }
 
     // ── Composite key shared across all aggregation dictionaries ────────────
@@ -92,12 +128,12 @@ public class ConsolidacionService : IConsolidacionService
             FechaInicio    = DateTime.UtcNow,
             Estado         = EstadoConsolidacion.Procesando,
             IniciadoPor    = iniciadoPor,
-            TotalRegistros = 5, // 5 parsers = unidad de progreso inicial
+            TotalRegistros = 6, // 6 parsers = unidad de progreso inicial
         };
         _db.ConsolidacionLogs.Add(log);
         await _db.SaveChangesAsync();
 
-        // Inicializar caché con los 5 archivos en estado Pendiente desde el primer momento
+        // Inicializar caché con los 6 archivos en estado Pendiente desde el primer momento
         var fuentesIniciales = new List<FuenteEstadoDto>
         {
             new() { Archivo = "GR55",               Estado = "Pendiente", RegistrosProcesados = 0, TotalRegistros = 0 },
@@ -105,6 +141,7 @@ public class ConsolidacionService : IConsolidacionService
             new() { Archivo = "Planeacion",          Estado = "Pendiente", RegistrosProcesados = 0, TotalRegistros = 0 },
             new() { Archivo = "TipoCambio",          Estado = "Pendiente", RegistrosProcesados = 0, TotalRegistros = 0 },
             new() { Archivo = "MaestroReferencias",  Estado = "Pendiente", RegistrosProcesados = 0, TotalRegistros = 0 },
+            new() { Archivo = "P26",                 Estado = "Pendiente", RegistrosProcesados = 0, TotalRegistros = 0 },
         };
         _progressCache[log.Id] = fuentesIniciales;
 
@@ -117,65 +154,104 @@ public class ConsolidacionService : IConsolidacionService
     // ════════════════════════════════════════════════════════════════════════
     public async Task IniciarConsolidacionAsync(int consolidacionId)
     {
-        var log = await _db.ConsolidacionLogs.FindAsync(consolidacionId);
-        if (log is null)
-        {
-            _logger.LogError("ConsolidacionService: log {Id} no encontrado.", consolidacionId);
-            return;
-        }
-
-        // Asegurar que la caché existe aunque CrearLogAsync haya sido llamado desde otro scope
-        if (!_progressCache.ContainsKey(consolidacionId))
-        {
-            _progressCache[consolidacionId] = new List<FuenteEstadoDto>
-            {
-                new() { Archivo = "GR55",              Estado = "Pendiente" },
-                new() { Archivo = "Horas",             Estado = "Pendiente" },
-                new() { Archivo = "Planeacion",        Estado = "Pendiente" },
-                new() { Archivo = "TipoCambio",        Estado = "Pendiente" },
-                new() { Archivo = "MaestroReferencias",Estado = "Pendiente" },
-            };
-        }
-
-        var warnings = new ConcurrentBag<string>();
+        var warnings = new List<string>();
 
         try
         {
+            var log = await _db.ConsolidacionLogs.FindAsync(consolidacionId);
+            if (log is null)
+            {
+                _logger.LogError("ConsolidacionService: log {Id} no encontrado.", consolidacionId);
+                return;
+            }
+
+            // Asegurar que la caché existe aunque CrearLogAsync haya sido llamado desde otro scope
+            if (!_progressCache.ContainsKey(consolidacionId))
+            {
+                _progressCache[consolidacionId] = new List<FuenteEstadoDto>
+                {
+                    new() { Archivo = "GR55",              Estado = "Pendiente" },
+                    new() { Archivo = "Horas",             Estado = "Pendiente" },
+                    new() { Archivo = "Planeacion",        Estado = "Pendiente" },
+                    new() { Archivo = "TipoCambio",        Estado = "Pendiente" },
+                    new() { Archivo = "MaestroReferencias",Estado = "Pendiente" },
+                    new() { Archivo = "P26",               Estado = "Pendiente" },
+                };
+            }
+
             var rutaBase = _config["ConsolidacionArchivos:RutaBase"] ?? string.Empty;
 
-            // ── Parsear los 5 archivos en paralelo con Task.Run (parsers son CPU-bound síncronos) ──
-            var gr55Task    = Task.Run(() => ParsearArchivo(consolidacionId,
-                Path.Combine(rutaBase, _config["ConsolidacionArchivos:GR55"]               ?? "GR55.xlsx"),
+            // ── Parsear las 6 fuentes EN PARALELO ────────────────────────────
+            // Los parsers son síncronos (trabajo CPU/IO que devuelve Task.FromResult),
+            // por lo que se ofrecen a hilos del pool con Task.Run para que corran
+            // realmente en paralelo. Cada parser lee su propio archivo y solo actualiza
+            // el caché de progreso (thread-safe); NINGUNO toca el DbContext.
+            // Detección por palabra clave: el archivo se ubica por una palabra clave en
+            // su nombre (ej. "gr55") en vez del nombre exacto, para tolerar renombrados.
+            // Si el nombre exacto de config existe, tiene prioridad.
+            var tGr55  = Task.Run(() => ParsearArchivo(consolidacionId,
+                ResolverArchivo(rutaBase, _config["ConsolidacionArchivos:GR55"],               ["gr55"]),
                 _gr55Parser.ParsearAsync, "GR55", warnings));
-            var horasTask   = Task.Run(() => ParsearArchivo(consolidacionId,
-                Path.Combine(rutaBase, _config["ConsolidacionArchivos:Horas"]              ?? "Horas.xlsx"),
+            var tHoras = Task.Run(() => ParsearArchivo(consolidacionId,
+                ResolverArchivo(rutaBase, _config["ConsolidacionArchivos:Horas"],              ["horas"]),
                 _horasParser.ParsearAsync, "Horas", warnings));
-            var planTask    = Task.Run(() => ParsearArchivo(consolidacionId,
-                Path.Combine(rutaBase, _config["ConsolidacionArchivos:Planeacion"]         ?? "Planeacion.xlsx"),
+            var tPlan  = Task.Run(() => ParsearArchivo(consolidacionId,
+                ResolverArchivo(rutaBase, _config["ConsolidacionArchivos:Planeacion"],         ["proyeccion", "proyección", "planeacion", "planeación"]),
                 _planeacionParser.ParsearAsync, "Planeacion", warnings));
-            var tdcTask     = Task.Run(() => ParsearArchivo(consolidacionId,
-                Path.Combine(rutaBase, _config["ConsolidacionArchivos:TipoCambio"]         ?? "TDC.xlsx"),
+            var tTdc   = Task.Run(() => ParsearArchivo(consolidacionId,
+                ResolverArchivo(rutaBase, _config["ConsolidacionArchivos:TipoCambio"],         ["tdc", "tipo de cambio", "tipocambio"]),
                 _tipoCambioParser.ParsearAsync, "TipoCambio", warnings));
-            var maestroTask = Task.Run(() => ParsearArchivo(consolidacionId,
-                Path.Combine(rutaBase, _config["ConsolidacionArchivos:MaestroReferencias"] ?? "MaestroReferencias.xlsx"),
+            var tMaest = Task.Run(() => ParsearArchivo(consolidacionId,
+                ResolverArchivo(rutaBase, _config["ConsolidacionArchivos:MaestroReferencias"], ["maestro"]),
                 _maestroParser.ParsearAsync, "MaestroReferencias", warnings));
+            var tP26   = Task.Run(() => ParsearArchivo(consolidacionId,
+                ResolverArchivo(rutaBase, _config["ConsolidacionArchivos:P26"],                ["p26"]),
+                _p26Parser.ParsearAsync, "P26", warnings));
 
-            await Task.WhenAll(gr55Task, horasTask, planTask, tdcTask, maestroTask);
+            var timeout = TimeSpan.FromMinutes(30);
+            var allParsers = Task.WhenAll(tGr55, tHoras, tPlan, tTdc, tMaest, tP26);
+            if (await Task.WhenAny(allParsers, Task.Delay(timeout)) != allParsers)
+            {
+                var msg = $"La consolidación superó el tiempo máximo de espera ({timeout.TotalMinutes} minutos).";
+                warnings.Add(msg);
+                _logger.LogWarning("ConsolidacionService: {Msg}", msg);
+                throw new TimeoutException(msg);
+            }
 
-            var gr55Registros       = await gr55Task;
-            var horasRegistros      = await horasTask;
-            var planeacionRegistros = await planTask;
-            var tdcRegistros        = await tdcTask;
-            var maestro             = await maestroTask ?? new MaestroReferenciasDto();
+            var gr55Registros       = tGr55.Result;
+            var horasRegistros      = tHoras.Result;
+            var planeacionRegistros = tPlan.Result;
+            var tdcRegistros        = tTdc.Result;
+            var maestro             = tMaest.Result ?? new MaestroReferenciasDto();
+            var p26Registros        = tP26.Result;
+
+            // Parseo completado (6 fuentes). El detalle por fuente ya se reflejó en el
+            // caché en vivo durante el WhenAll.
+            log.RegistrosExitosos = 6;
+            await _db.SaveChangesAsync();
 
             // ── Persistir tasas COP en TiposCambio ─────────────────────────
             await PersistirTiposCambioAsync(tdcRegistros ?? []);
 
-            // Lookup local de tasas para normalizar Planeación COP → USD
+            // Lookup local de tasas para normalizar valores COP → USD-equivalente.
             var tdcDict = (tdcRegistros ?? [])
                 .Where(r => r.TasaCop > 0)
                 .GroupBy(r => (r.Año, r.Mes))
                 .ToDictionary(g => g.Key, g => g.First().TasaCop);
+
+            // Última tasa disponible: proxy para períodos sin TDC registrado.
+            var ultimaTasaCop = tdcDict.Count > 0
+                ? tdcDict.OrderByDescending(kv => kv.Key.Año).ThenByDescending(kv => kv.Key.Mes).First().Value
+                : 1m;
+            if (ultimaTasaCop == 0) ultimaTasaCop = 1m;
+
+            // GR55 viene en COP (columna "en moneda de la sociedad"): convertir a
+            // USD-equivalente dividiendo por la tasa del período (o la última como proxy).
+            decimal Gr55EnUsdEquiv(decimal valorCop, int año, int mes)
+            {
+                var tasa = tdcDict.TryGetValue((año, mes), out var t) && t > 0 ? t : ultimaTasaCop;
+                return tasa != 0 ? valorCop / tasa : valorCop;
+            }
 
             // ── Lookups desde el Maestro de referencias ──────────────────────
             var cuentaClasif = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -190,6 +266,7 @@ public class ConsolidacionService : IConsolidacionService
             foreach (var s in maestro.Sociedades.Where(s => !string.IsNullOrWhiteSpace(s.Sociedad)))
                 sociedadDict.TryAdd(s.Sociedad.Trim(), s);
 
+
             var industriaDict = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (var i in maestro.Industrias.Where(i => !string.IsNullOrWhiteSpace(i.CodIndustria)))
                 industriaDict.TryAdd(i.CodIndustria.Trim(), i.Vertical.Trim());
@@ -198,32 +275,78 @@ public class ConsolidacionService : IConsolidacionService
             foreach (var a in maestro.Areas.Where(a => !string.IsNullOrWhiteSpace(a.CeBe)))
                 areaDict.TryAdd(a.CeBe.Trim(), a.Area.Trim());
 
+            // Responsable: responsable_wbs → nombre completo (Bug 145)
+            var responsableDict = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var r in maestro.Responsables.Where(r => !string.IsNullOrWhiteSpace(r.ResponsableWbs)))
+                responsableDict.TryAdd(r.ResponsableWbs.Trim(), r.ResponsableName.Trim());
+
             // ── Agregar GR55 → IngresoReal / CostoReal ───────────────────────
+            // Solo cuentas clasificadas en el Maestro (Accounts_Group) afectan el cálculo:
+            //   "Ingreso" → IngresoReal · "costos" → CostoReal.
+            // Las cuentas sin clasificación se ignoran para no inflar el costo (Bug 138).
             var gr55Agg = new Dictionary<ClaveProyecto, Gr55Bucket>();
+            var cuentasSinClasif = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             foreach (var r in (gr55Registros ?? []).Where(r => !string.IsNullOrWhiteSpace(r.ElementoPEP)))
             {
                 var clave = new ClaveProyecto(r.ElementoPEP.Trim(), r.Ejercicio, r.PeriodoContable);
-                var valor = r.ValorMonedaLocalCeBe;
+                var valor = Gr55EnUsdEquiv(r.ValorMonedaLocalCeBe, r.Ejercicio, r.PeriodoContable);
                 cuentaClasif.TryGetValue(r.NumeroCuenta.Trim(), out var clasif);
 
                 var prev = gr55Agg.GetValueOrDefault(clave)
                            ?? new Gr55Bucket(0m, 0m, string.Empty, string.Empty);
 
-                var esIngreso = clasif?.Equals("Ingreso", StringComparison.OrdinalIgnoreCase) == true;
+                var esIngreso = clasif?.StartsWith("Ingreso", StringComparison.OrdinalIgnoreCase) == true;
+                var esCosto   = clasif?.StartsWith("costo",   StringComparison.OrdinalIgnoreCase) == true;
+                if (!esIngreso && !esCosto && valor != 0m)
+                    cuentasSinClasif.Add(r.NumeroCuenta.Trim());
 
                 gr55Agg[clave] = new Gr55Bucket(
-                    IngresoReal     : prev.IngresoReal + (esIngreso ?  valor : 0m),
-                    CostoReal       : prev.CostoReal   + (esIngreso ? 0m : -valor),
+                    IngresoReal     : prev.IngresoReal + (esIngreso ? valor  : 0m),
+                    CostoReal       : prev.CostoReal   + (esCosto   ? -valor : 0m),
                     SocReceptora    : r.SocReceptora,
                     CentroBeneficio : r.CentroBeneficio);
             }
 
-            // ── Agregar Planeación → IngresoPlaneado / CostoPlaneado (COP → USD) ─
-            var ultimaTasaCop = tdcDict.Count > 0
-                ? tdcDict.OrderByDescending(kv => kv.Key.Año).ThenByDescending(kv => kv.Key.Mes).First().Value
-                : 1m;
+            if (cuentasSinClasif.Count > 0)
+                warnings.Add($"GR55: {cuentasSinClasif.Count} cuenta(s) sin clasificación en el Maestro se ignoraron " +
+                             $"(no suman ingreso ni costo): {string.Join(", ", cuentasSinClasif.OrderBy(c => c).Take(20))}" +
+                             (cuentasSinClasif.Count > 20 ? "…" : ""));
 
+            // ── Persistencia incremental del GR55 (generación mensual) ────────
+            // El GR55 se acumula por (Año, Mes): los meses que trae el archivo nuevo
+            // se sobreescriben, y los meses cargados en consolidaciones anteriores se
+            // conservan. Para que Proyectos y el P&L reflejen todo el histórico, se
+            // integran al ingreso/costo real (gr55Agg) los movimientos ya persistidos
+            // de los OTROS meses (los que este archivo no trae). Su Valor ya está en
+            // USD-equivalente, así que se reclasifica por cuenta pero no se re-convierte.
+            var clavesMesNuevos = (gr55Registros ?? [])
+                .Select(r => r.Ejercicio * 100 + r.PeriodoContable)
+                .Distinct()
+                .ToList();
+
+            var movPersistidosOtrosMeses = await _db.MovimientosGR55.AsNoTracking()
+                .Where(m => !clavesMesNuevos.Contains(m.Año * 100 + m.Mes))
+                .ToListAsync();
+
+            foreach (var m in movPersistidosOtrosMeses)
+            {
+                cuentaClasif.TryGetValue(m.NumeroCuenta.Trim(), out var clasif);
+                var esIngreso = clasif?.StartsWith("Ingreso", StringComparison.OrdinalIgnoreCase) == true;
+                var esCosto   = clasif?.StartsWith("costo",   StringComparison.OrdinalIgnoreCase) == true;
+                if (!esIngreso && !esCosto) continue;
+
+                var clave = new ClaveProyecto(m.CodProyecto, m.Año, m.Mes);
+                var prev  = gr55Agg.GetValueOrDefault(clave)
+                            ?? new Gr55Bucket(0m, 0m, string.Empty, string.Empty);
+                gr55Agg[clave] = prev with
+                {
+                    IngresoReal = prev.IngresoReal + (esIngreso ? m.Valor  : 0m),
+                    CostoReal   = prev.CostoReal   + (esCosto   ? -m.Valor : 0m),
+                };
+            }
+
+            // ── Agregar Planeación → IngresoPlaneado / CostoPlaneado (COP → USD) ─
             var planAgg = new Dictionary<ClaveProyecto, PlanBucket>();
             var periodosSinTasa = new HashSet<(int Año, int Mes)>();
 
@@ -251,14 +374,65 @@ public class ConsolidacionService : IConsolidacionService
             foreach (var (año, mes) in periodosSinTasa.OrderBy(x => x.Año).ThenBy(x => x.Mes))
                 warnings.Add($"Planeación {año}/{mes:D2}: sin tasa TDC — se usó última tasa disponible ({ultimaTasaCop:F2}) como proxy.");
 
+            // Fallback de responsable por proyecto: cuando un período no tiene responsable
+            // (sin registro de planeación), se reutiliza el responsable_wbs del mismo proyecto
+            // en otro período disponible (Bug 149).
+            var responsableWbsPorProyecto = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var kv in planAgg)
+                if (!string.IsNullOrWhiteSpace(kv.Value.Responsable))
+                    responsableWbsPorProyecto.TryAdd(kv.Key.CodProyecto, kv.Value.Responsable);
+
             // ── Agregar Horas por (Proyecto, Año, Mes) ───────────────────────
-            var horasAgg = new Dictionary<ClaveProyecto, decimal>();
+            // HorasBucket preserva proyecto_sociedad_fi además de las horas acumuladas.
+            // Es la fuente primaria de Sociedad/País; GR55 SocReceptora es el fallback.
+            var horasAgg = new Dictionary<ClaveProyecto, HorasBucket>();
 
             foreach (var r in (horasRegistros ?? []).Where(r => !string.IsNullOrWhiteSpace(r.Proyecto)))
             {
-                var clave = new ClaveProyecto(r.Proyecto.Trim(), r.Año, r.Mes);
-                horasAgg[clave] = horasAgg.GetValueOrDefault(clave) + r.Horas;
+                var clave    = new ClaveProyecto(r.Proyecto.Trim(), r.Año, r.Mes);
+                var existing = horasAgg.GetValueOrDefault(clave);
+                // Horas se acumulan; sociedad: tomar la primera no vacía encontrada
+                var sociedad = !string.IsNullOrWhiteSpace(r.Sociedad)
+                    ? r.Sociedad
+                    : existing?.Sociedad ?? string.Empty;
+                horasAgg[clave] = new HorasBucket((existing?.Horas ?? 0m) + r.Horas, sociedad);
             }
+
+            // Mapa canónico de sociedad: colapsa todas las variantes crudas (con/sin
+            // código de país, sólo código) a un único valor por código (Bug 133).
+            var sociedadCanonica = ConstruirSociedadCanonica(
+                horasAgg.Values.Select(b => b.Sociedad)
+                    .Concat(gr55Agg.Values.Select(g => g.SocReceptora)),
+                sociedadDict);
+
+            // Fallback de metadatos por proyecto entre períodos (Bug 149): cuando un
+            // período carece de cliente/industria/cebe/sociedad (porque la fuente que
+            // los aporta no tiene ese año/mes), se reutiliza el primer valor no vacío
+            // del mismo proyecto en cualquier otro período disponible.
+            var clientePorProyecto   = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var industriaPorProyecto = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var cebePorProyecto      = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var socRawPorProyecto    = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var kv in planAgg)
+            {
+                if (!string.IsNullOrWhiteSpace(kv.Value.Cliente))   clientePorProyecto.TryAdd(kv.Key.CodProyecto, kv.Value.Cliente);
+                if (!string.IsNullOrWhiteSpace(kv.Value.Industria)) industriaPorProyecto.TryAdd(kv.Key.CodProyecto, kv.Value.Industria);
+                if (!string.IsNullOrWhiteSpace(kv.Value.Cebe))      cebePorProyecto.TryAdd(kv.Key.CodProyecto, kv.Value.Cebe);
+            }
+            foreach (var kv in horasAgg) // sociedad primaria = proyecto_sociedad_fi (Horas)
+                if (!string.IsNullOrWhiteSpace(kv.Value.Sociedad)) socRawPorProyecto.TryAdd(kv.Key.CodProyecto, kv.Value.Sociedad);
+            foreach (var kv in gr55Agg)
+            {
+                if (!string.IsNullOrWhiteSpace(kv.Value.CentroBeneficio)) cebePorProyecto.TryAdd(kv.Key.CodProyecto, kv.Value.CentroBeneficio);
+                if (!string.IsNullOrWhiteSpace(kv.Value.SocReceptora))    socRawPorProyecto.TryAdd(kv.Key.CodProyecto, kv.Value.SocReceptora);
+            }
+
+            // Área directa del archivo de Horas (proyecto_area) como fallback cuando el
+            // CeBe no resuelve área — típico de proyectos que solo existen en Horas.
+            var areaHorasPorProyecto = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var r in horasRegistros ?? [])
+                if (!string.IsNullOrWhiteSpace(r.Area) && !string.IsNullOrWhiteSpace(r.Proyecto))
+                    areaHorasPorProyecto.TryAdd(r.Proyecto.Trim(), r.Area.Trim());
 
             // ── Unión de todas las claves únicas ─────────────────────────────
             var todasLasClaves = new HashSet<ClaveProyecto>(gr55Agg.Keys);
@@ -275,27 +449,60 @@ public class ConsolidacionService : IConsolidacionService
                 {
                     gr55Agg.TryGetValue(clave, out var g);
                     planAgg.TryGetValue(clave, out var p);
-                    horasAgg.TryGetValue(clave, out var horas);
+                    horasAgg.TryGetValue(clave, out var bucket);
+                    var horas = bucket?.Horas ?? 0m;
 
-                    var rawSoc = g?.SocReceptora ?? string.Empty;
-                    sociedadDict.TryGetValue(rawSoc, out var socRef);
-                    var sociedad = socRef?.RazonSocial ?? rawSoc;
-                    var pais     = socRef?.Pais ?? string.Empty;
+                    // Sociedad: primaria = Horas (proyecto_sociedad_fi); fallback = GR55 SocReceptora;
+                    // y, si el período no la tiene, el mismo proyecto en otro período (Bug 149).
+                    // Se normaliza a un único valor canónico por sociedad (Bug 133).
+                    var rawSoc = !string.IsNullOrWhiteSpace(bucket?.Sociedad)
+                        ? bucket.Sociedad.Trim()
+                        : !string.IsNullOrWhiteSpace(g?.SocReceptora)
+                            ? g.SocReceptora.Trim()
+                            : socRawPorProyecto.GetValueOrDefault(clave.CodProyecto, string.Empty).Trim();
+                    string sociedad, pais;
+                    if (sociedadCanonica.TryGetValue(rawSoc, out var canon))
+                        { sociedad = canon.Nombre; pais = canon.Pais; }
+                    else
+                        { sociedad = rawSoc; pais = string.Empty; }
 
+                    // CeBe: GR55 → Planeación → mismo proyecto en otro período (Bug 149)
                     var rawCebe = !string.IsNullOrWhiteSpace(g?.CentroBeneficio)
                         ? g.CentroBeneficio
-                        : p?.Cebe ?? string.Empty;
+                        : !string.IsNullOrWhiteSpace(p?.Cebe)
+                            ? p!.Cebe
+                            : cebePorProyecto.GetValueOrDefault(clave.CodProyecto, string.Empty);
 
                     var cebeNombre = rawCebe;
                     if (!string.IsNullOrWhiteSpace(rawCebe) && cebeDict.TryGetValue(rawCebe, out var cebeRef))
                         cebeNombre = cebeRef.Nombre;
 
-                    var industria = p?.Industria ?? string.Empty;
+                    // Industria: del período o, si falta, del mismo proyecto en otro período (Bug 149)
+                    var industria = !string.IsNullOrWhiteSpace(p?.Industria)
+                        ? p!.Industria
+                        : industriaPorProyecto.GetValueOrDefault(clave.CodProyecto, string.Empty);
                     var vertical  = industriaDict.TryGetValue(industria, out var vNombre) ? vNombre : industria;
 
                     var area = string.Empty;
                     if (!string.IsNullOrWhiteSpace(rawCebe))
                         areaDict.TryGetValue(rawCebe, out area!);
+                    // Fallback: área directa del archivo de Horas (proyecto_area)
+                    if (string.IsNullOrWhiteSpace(area))
+                        area = areaHorasPorProyecto.GetValueOrDefault(clave.CodProyecto, string.Empty);
+
+                    // Responsable: wbs del período o, si falta, el del mismo proyecto en otro
+                    // período (Bug 149); luego se traduce wbs → nombre completo (Bug 145).
+                    var respWbs = !string.IsNullOrWhiteSpace(p?.Responsable)
+                        ? p!.Responsable
+                        : responsableWbsPorProyecto.GetValueOrDefault(clave.CodProyecto, string.Empty);
+                    var responsable = !string.IsNullOrWhiteSpace(respWbs) && responsableDict.TryGetValue(respWbs.Trim(), out var respNombre)
+                        ? respNombre
+                        : LimpiarHtml(respWbs);
+
+                    // Cliente: del período o, si falta, del mismo proyecto en otro período (Bug 149)
+                    var cliente = !string.IsNullOrWhiteSpace(p?.Cliente)
+                        ? p!.Cliente
+                        : clientePorProyecto.GetValueOrDefault(clave.CodProyecto, string.Empty);
 
                     proyectos.Add(new Proyecto
                     {
@@ -314,8 +521,8 @@ public class ConsolidacionService : IConsolidacionService
                         Industria        = industria,
                         Vertical         = vertical ?? string.Empty,
                         Area             = area ?? string.Empty,
-                        Cliente          = LimpiarHtml(p?.Cliente),
-                        Responsable      = LimpiarHtml(p?.Responsable),
+                        Cliente          = LimpiarHtml(cliente),
+                        Responsable      = responsable,
                     });
 
                     exitosos++;
@@ -329,11 +536,114 @@ public class ConsolidacionService : IConsolidacionService
                 }
             }
 
-            await BulkInsertProyectosAsync(proyectos);
+            // ── Refresco de datos (una sola verdad acumulada) ─────────────────
+            // Proyectos, plan P26 y árbol de cuentas se derivan de snapshots completos
+            // (Horas/Planeación/P26/Maestro llegan enteros cada corrida): se reemplazan
+            // por completo. El GR55 es incremental mensual: solo se borran los meses que
+            // trae el archivo nuevo; el resto de meses persiste. Todo en una transacción
+            // para no dejar la base a medias si algo falla.
+            await using var tx = await _db.Database.BeginTransactionAsync();
+            await _db.Proyectos.ExecuteDeleteAsync();
+            await _db.PlanesVerticalP26.ExecuteDeleteAsync();
+            await _db.CuentasPnl.ExecuteDeleteAsync();
+            if (clavesMesNuevos.Count > 0)
+                await _db.MovimientosGR55
+                    .Where(m => clavesMesNuevos.Contains(m.Año * 100 + m.Mes))
+                    .ExecuteDeleteAsync();
 
-            // Eliminar proyectos de consolidaciones previas para mantener la tabla liviana
-            await _db.Database.ExecuteSqlRawAsync(
-                "DELETE FROM \"Proyectos\" WHERE \"ConsolidacionId\" != {0}", log.Id);
+            _db.Proyectos.AddRange(proyectos);
+
+            // ── Agregar plan P26 por Vertical × Año × Mes (HUE-02) ─────────────
+            // Baseline de comparación del dashboard. Se clasifica el Amount por la
+            // categoría del campo Task y se resuelve la vertical con el mismo
+            // industriaDict que usa Proyecto (para que el string coincida exacto).
+            var p26Agg = new Dictionary<(string Vertical, int Año, int Mes), P26Bucket>();
+            var p26SinMapear = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var r in (p26Registros ?? []).Where(r => !string.IsNullOrWhiteSpace(r.SourceName)))
+            {
+                var esIngreso = _p26TasksIngreso.Contains(r.Task);
+                var esCosto   = _p26TasksCosto.Contains(r.Task);
+                if (!esIngreso && !esCosto) continue; // tasks de P&L no aplican al dashboard
+
+                var src = NormalizarSourceP26(r.SourceName);
+                if (!_p26SourceToCodIndustria.TryGetValue(src, out var codInd))
+                { p26SinMapear.Add(src); continue; }
+                var vertical = industriaDict.TryGetValue(codInd, out var v) ? v : codInd;
+
+                // Amount viene en COP. Se guarda como "USD-equivalente" (Amount/tasaCop)
+                // igual que IngresoPlaneado, para que el Factor del dashboard lo convierta
+                // correctamente a COP o USD según el filtro de moneda.
+                if (!tdcDict.TryGetValue((r.Año, r.Mes), out var tasaP26) || tasaP26 <= 0)
+                    tasaP26 = ultimaTasaCop;
+
+                var clave = (vertical, r.Año, r.Mes);
+                var prev  = p26Agg.GetValueOrDefault(clave) ?? new P26Bucket(0m, 0m);
+                p26Agg[clave] = new P26Bucket(
+                    IngresoPlan: prev.IngresoPlan + (esIngreso ? r.Amount / tasaP26 : 0m),
+                    CostoPlan  : prev.CostoPlan   + (esCosto   ? r.Amount / tasaP26 : 0m));
+            }
+            if (p26SinMapear.Count > 0)
+                warnings.Add($"P26: {p26SinMapear.Count} Source.Name sin mapeo a vertical: {string.Join(", ", p26SinMapear.OrderBy(s => s))}");
+
+            var planesP26 = p26Agg.Select(kv => new PlanVerticalP26
+            {
+                ConsolidacionId = log.Id,
+                Vertical    = kv.Key.Vertical,
+                Año         = kv.Key.Año,
+                Mes         = kv.Key.Mes,
+                IngresoPlan = kv.Value.IngresoPlan,
+                CostoPlan   = kv.Value.CostoPlan,
+            }).ToList();
+            _db.PlanesVerticalP26.AddRange(planesP26);
+
+            // ── Módulo P&L: jerarquía de cuentas + movimientos GR55 ────────────
+            // CuentaPnl = árbol de Accounts_Group (para armar la tabla P&L jerárquica).
+            var cuentasPnl = new List<CuentaPnl>();
+            var ordenPnl = 0;
+            foreach (var a in maestro.AccountsGroups.Where(a => !string.IsNullOrWhiteSpace(a.LineItemId)))
+                cuentasPnl.Add(new CuentaPnl
+                {
+                    ConsolidacionId = log.Id,
+                    LineItemId     = a.LineItemId.Trim(),
+                    AccountName    = a.Account?.Trim() ?? string.Empty,
+                    ParentId       = a.ParentId?.Trim() ?? string.Empty,
+                    Nivel          = a.Nivel,
+                    TipoFinanciero = a.Clasificacion?.Trim() ?? string.Empty,
+                    Referencia     = a.Referencia?.Trim() ?? string.Empty,
+                    Orden          = ordenPnl++,
+                });
+            _db.CuentasPnl.AddRange(cuentasPnl);
+
+            // MovimientoGR55 = GR55 agregado por (cuenta, año, mes, proyecto), con
+            // Cliente/Vertical desnormalizados para filtrar el P&L. Valor ya invertido
+            // y en USD-equivalente (igual que el dashboard).
+            var movAgg = new Dictionary<(string Cuenta, int Año, int Mes, string Proy), decimal>();
+            foreach (var r in (gr55Registros ?? [])
+                         .Where(r => !string.IsNullOrWhiteSpace(r.NumeroCuenta) && !string.IsNullOrWhiteSpace(r.ElementoPEP)))
+            {
+                var clave = (r.NumeroCuenta.Trim(), r.Ejercicio, r.PeriodoContable, r.ElementoPEP.Trim());
+                movAgg[clave] = movAgg.GetValueOrDefault(clave)
+                    + Gr55EnUsdEquiv(r.ValorMonedaLocalCeBe, r.Ejercicio, r.PeriodoContable);
+            }
+            var movimientos = movAgg.Select(kv =>
+            {
+                var proy    = kv.Key.Proy;
+                var cliente = clientePorProyecto.GetValueOrDefault(proy, string.Empty);
+                var indus   = industriaPorProyecto.GetValueOrDefault(proy, string.Empty);
+                var vert    = industriaDict.TryGetValue(indus, out var vv) ? vv : string.Empty;
+                return new MovimientoGR55
+                {
+                    ConsolidacionId = log.Id,
+                    NumeroCuenta = kv.Key.Cuenta,
+                    Año          = kv.Key.Año,
+                    Mes          = kv.Key.Mes,
+                    CodProyecto  = proy,
+                    Cliente      = LimpiarHtml(cliente),
+                    Vertical     = vert,
+                    Valor        = kv.Value,
+                };
+            }).ToList();
+            _db.MovimientosGR55.AddRange(movimientos);
 
             // ── Estado final y contadores reales ──────────────────────────────
             var estado = exitosos == 0
@@ -355,6 +665,7 @@ public class ConsolidacionService : IConsolidacionService
             _progressCache.TryRemove(consolidacionId, out _);
 
             await _db.SaveChangesAsync();
+            await tx.CommitAsync();
 
             _logger.LogInformation(
                 "Consolidación {Id} completada: {Exitosos} proyectos, {Fallidos} errores, estado={Estado}",
@@ -364,19 +675,30 @@ public class ConsolidacionService : IConsolidacionService
         {
             _logger.LogError(ex, "ConsolidacionService: error fatal en consolidación {Id}", consolidacionId);
 
-            var logFatal = await _db.ConsolidacionLogs.FindAsync(consolidacionId);
-            if (logFatal is not null)
+            try
             {
-                logFatal.FechaFin = DateTime.UtcNow;
-                logFatal.Estado   = EstadoConsolidacion.Fallido;
-                logFatal.Errores  = JsonSerializer.Serialize(new[] { ex.Message });
+                // Limpiar el tracker para evitar que intente guardar entidades
+                // huérfanas que quedaron trackeadas (Added) antes del error.
+                _db.ChangeTracker.Clear();
 
-                // Guardar fuentes con error y limpiar caché
-                if (_progressCache.TryGetValue(consolidacionId, out var fuentesError))
-                    logFatal.FuentesJson = JsonSerializer.Serialize(fuentesError);
-                _progressCache.TryRemove(consolidacionId, out _);
+                var logFatal = await _db.ConsolidacionLogs.FindAsync(consolidacionId);
+                if (logFatal is not null)
+                {
+                    logFatal.FechaFin = DateTime.UtcNow;
+                    logFatal.Estado   = EstadoConsolidacion.Fallido;
+                    logFatal.Errores  = JsonSerializer.Serialize(new[] { ex.Message });
 
-                await _db.SaveChangesAsync();
+                    // Guardar fuentes con error y limpiar caché
+                    if (_progressCache.TryGetValue(consolidacionId, out var fuentesError))
+                        logFatal.FuentesJson = JsonSerializer.Serialize(fuentesError);
+                    _progressCache.TryRemove(consolidacionId, out _);
+
+                    await _db.SaveChangesAsync();
+                }
+            }
+            catch (Exception ex2)
+            {
+                _logger.LogError(ex2, "ConsolidacionService: error al registrar fallo en BD para {Id}", consolidacionId);
             }
         }
     }
@@ -390,6 +712,16 @@ public class ConsolidacionService : IConsolidacionService
         if (log is null)
             return ApiResponse<ConsolidacionEstadoDto>.Fail($"Consolidación {consolidacionId} no encontrada.");
 
+        // Auto-recuperación: si la BD dice "Procesando" pero no hay caché en vivo
+        // ni FechaFin, es porque la app se reinició durante el procesamiento.
+        if (log.Estado == EstadoConsolidacion.Procesando && !log.FechaFin.HasValue && !_progressCache.ContainsKey(consolidacionId))
+        {
+            log.FechaFin = DateTime.UtcNow;
+            log.Estado   = EstadoConsolidacion.Fallido;
+            log.Errores  = JsonSerializer.Serialize(new[] { "La aplicación se reinició durante la consolidación." });
+            await _db.SaveChangesAsync();
+        }
+
         List<string> errores = [];
         if (!string.IsNullOrWhiteSpace(log.Errores))
         {
@@ -397,9 +729,24 @@ public class ConsolidacionService : IConsolidacionService
             catch { errores = [log.Errores]; }
         }
 
-        var porcentaje = log.TotalRegistros > 0
-            ? (int)Math.Round(log.RegistrosExitosos * 100.0 / log.TotalRegistros)
-            : log.FechaFin.HasValue ? 100 : 0;
+        // Avance en vivo: durante el parseo paralelo el porcentaje se deriva de las
+        // fuentes ya completadas en el caché (no del contador secuencial). Al finalizar
+        // (caché removido) se reporta 100% si la corrida terminó.
+        int porcentaje;
+        if (_progressCache.TryGetValue(consolidacionId, out var fuentesPct))
+        {
+            int totalF, hechasF;
+            lock (fuentesPct)
+            {
+                totalF  = fuentesPct.Count;
+                hechasF = fuentesPct.Count(f => f.Estado is "Exitoso" or "Fallido");
+            }
+            porcentaje = totalF > 0 ? (int)Math.Round(hechasF * 100.0 / totalF) : 0;
+        }
+        else
+        {
+            porcentaje = log.FechaFin.HasValue ? 100 : 0;
+        }
 
         // ── Fuentes: caché en vivo (Procesando) → BD serializada (Completado) ─
         List<FuenteEstadoDto> fuentes = [];
@@ -475,51 +822,6 @@ public class ConsolidacionService : IConsolidacionService
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    // Helper: insertar proyectos masivamente vía PostgreSQL COPY (mucho más rápido que EF AddRange)
-    // ════════════════════════════════════════════════════════════════════════
-    private async Task BulkInsertProyectosAsync(List<Proyecto> proyectos)
-    {
-        if (proyectos.Count == 0) return;
-
-        var connStr = _config.GetConnectionString("DefaultConnection")!;
-        await using var conn = new NpgsqlConnection(connStr);
-        await conn.OpenAsync();
-
-        await using var writer = await conn.BeginBinaryImportAsync(
-            """
-            COPY "Proyectos" ("ConsolidacionId","CodProyecto","Año","Mes",
-                "IngresoReal","CostoReal","IngresoPlaneado","CostoPlaneado","Horas",
-                "Sociedad","Pais","CeBe","Industria","Vertical","Area","Cliente","Responsable")
-            FROM STDIN (FORMAT BINARY)
-            """);
-
-        foreach (var p in proyectos)
-        {
-            await writer.StartRowAsync();
-            await writer.WriteAsync(p.ConsolidacionId,  NpgsqlDbType.Integer);
-            await writer.WriteAsync(p.CodProyecto,      NpgsqlDbType.Varchar);
-            await writer.WriteAsync(p.Año,              NpgsqlDbType.Integer);
-            await writer.WriteAsync(p.Mes,              NpgsqlDbType.Integer);
-            await writer.WriteAsync(p.IngresoReal,      NpgsqlDbType.Numeric);
-            await writer.WriteAsync(p.CostoReal,        NpgsqlDbType.Numeric);
-            await writer.WriteAsync(p.IngresoPlaneado,  NpgsqlDbType.Numeric);
-            await writer.WriteAsync(p.CostoPlaneado,    NpgsqlDbType.Numeric);
-            await writer.WriteAsync(p.Horas,            NpgsqlDbType.Numeric);
-            await writer.WriteAsync(p.Sociedad,         NpgsqlDbType.Varchar);
-            await writer.WriteAsync(p.Pais,             NpgsqlDbType.Varchar);
-            await writer.WriteAsync(p.CeBe,             NpgsqlDbType.Varchar);
-            await writer.WriteAsync(p.Industria,        NpgsqlDbType.Varchar);
-            await writer.WriteAsync(p.Vertical,         NpgsqlDbType.Varchar);
-            await writer.WriteAsync(p.Area,             NpgsqlDbType.Varchar);
-            await writer.WriteAsync(p.Cliente,          NpgsqlDbType.Varchar);
-            await writer.WriteAsync(p.Responsable,      NpgsqlDbType.Varchar);
-        }
-
-        await writer.CompleteAsync();
-        _logger.LogInformation("BulkInsert: {N} proyectos insertados vía COPY.", proyectos.Count);
-    }
-
-    // ════════════════════════════════════════════════════════════════════════
     // Helper: persistir TiposCambio
     // ════════════════════════════════════════════════════════════════════════
     private async Task PersistirTiposCambioAsync(List<RegistroTipoCambioDto> registros)
@@ -548,6 +850,40 @@ public class ConsolidacionService : IConsolidacionService
     }
 
     // ════════════════════════════════════════════════════════════════════════
+    // Helper: ubica el archivo de una fuente por PALABRA CLAVE en el nombre,
+    // para tolerar renombrados (ej. cualquier archivo con "gr55" en el nombre).
+    // Prioridad: 1) nombre exacto de config si existe; 2) primer archivo cuyo
+    // nombre contenga alguna palabra clave; 3) el nombre esperado (aunque no
+    // exista → ParsearArchivo lo reportará como "Archivo no encontrado").
+    // ════════════════════════════════════════════════════════════════════════
+    private static string ResolverArchivo(string rutaBase, string? nombreConfig, string[] palabrasClave)
+    {
+        static string Norm(string s)
+        {
+            var d = s.Normalize(System.Text.NormalizationForm.FormD);
+            var sb = new System.Text.StringBuilder(d.Length);
+            foreach (var c in d)
+                if (System.Globalization.CharUnicodeInfo.GetUnicodeCategory(c) != System.Globalization.UnicodeCategory.NonSpacingMark)
+                    sb.Append(c);
+            return sb.ToString().ToLowerInvariant();
+        }
+
+        var esperado = Path.Combine(rutaBase, nombreConfig ?? string.Empty);
+        if (!string.IsNullOrWhiteSpace(nombreConfig) && File.Exists(esperado))
+            return esperado;
+
+        if (Directory.Exists(rutaBase))
+        {
+            var claves = palabrasClave.Select(Norm).ToArray();
+            var match = Directory.EnumerateFiles(rutaBase, "*.xls*", SearchOption.TopDirectoryOnly)
+                .FirstOrDefault(f => claves.Any(k => Norm(Path.GetFileName(f)).Contains(k)));
+            if (match is not null) return match;
+        }
+
+        return esperado;
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
     // Helper: parsear un archivo con progreso en tiempo real en caché
     // ════════════════════════════════════════════════════════════════════════
     private async Task<T?> ParsearArchivo<T>(
@@ -555,7 +891,7 @@ public class ConsolidacionService : IConsolidacionService
         string ruta,
         Func<Stream, Action<int>?, Task<T>> parser,
         string nombre,
-        ConcurrentBag<string> warnings) where T : class
+        List<string> warnings) where T : class
     {
         // Marcar como Procesando en caché (visible de inmediato al polling)
         ActualizarFuenteEnCache(consolidacionId, nombre, "Procesando", 0, 0, null);
@@ -564,7 +900,7 @@ public class ConsolidacionService : IConsolidacionService
         {
             var error = $"Archivo no encontrado: {ruta}";
             ActualizarFuenteEnCache(consolidacionId, nombre, "Fallido", 0, 0, error);
-            warnings.Add($"{nombre}: {error}");
+            lock (warnings) warnings.Add($"{nombre}: {error}"); // thread-safe (parseo en paralelo)
             _logger.LogWarning("ConsolidacionService: {Msg}", error);
             return null;
         }
@@ -585,7 +921,7 @@ public class ConsolidacionService : IConsolidacionService
         catch (Exception ex)
         {
             ActualizarFuenteEnCache(consolidacionId, nombre, "Fallido", 0, 0, ex.Message);
-            warnings.Add($"{nombre}: {ex.Message}");
+            lock (warnings) warnings.Add($"{nombre}: {ex.Message}"); // thread-safe (parseo en paralelo)
             _logger.LogWarning(ex, "ConsolidacionService: error parseando {Nombre}", nombre);
             return null;
         }
@@ -614,4 +950,79 @@ public class ConsolidacionService : IConsolidacionService
             fuente.Error               = error;
         }
     }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // Helper: construye el mapa raw→canónico de sociedad (Bug 133).
+    // Agrupa por código numérico líder; el canónico es "{código} - {RazonSocial}"
+    // del maestro si existe, o el nombre más completo visto (sin prefijo de país)
+    // para códigos ausentes del maestro. Colapsa así variantes como
+    // "1060", "1060 - PER - Nearshore..." y "1060 - Nearshore..." en un solo valor.
+    // ════════════════════════════════════════════════════════════════════════
+    private static Dictionary<string, (string Nombre, string Pais)> ConstruirSociedadCanonica(
+        IEnumerable<string> valoresCrudos,
+        Dictionary<string, SociedadReferenciaDto> porCodigo)
+    {
+        static string CodigoDe(string s)
+        {
+            var m = System.Text.RegularExpressions.Regex.Match(s ?? "", @"^\s*(\d{3,})");
+            return m.Success ? m.Groups[1].Value : string.Empty;
+        }
+        static string NombreDe(string s)
+        {
+            var t = System.Text.RegularExpressions.Regex.Replace(s ?? "", @"^\s*\d{3,}\s*-?\s*", "");
+            t = System.Text.RegularExpressions.Regex.Replace(t, @"^[A-Z]{2,4}\s*-\s*", ""); // ISO país
+            return t.Trim();
+        }
+
+        var distintos = valoresCrudos
+            .Where(v => !string.IsNullOrWhiteSpace(v))
+            .Select(v => v.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        // Mejor nombre visto por código (el más largo, sin prefijo de país)
+        var mejorNombre = new Dictionary<string, string>();
+        foreach (var v in distintos)
+        {
+            var cod = CodigoDe(v);
+            if (cod == "") continue;
+            var nom = NombreDe(v);
+            if (!mejorNombre.TryGetValue(cod, out var prev) || nom.Length > prev.Length)
+                mejorNombre[cod] = nom;
+        }
+
+        // Canónico por código (maestro si existe, si no el mejor nombre observado)
+        var canonPorCodigo = new Dictionary<string, (string Nombre, string Pais)>();
+        foreach (var cod in mejorNombre.Keys)
+        {
+            if (porCodigo.TryGetValue(cod, out var refM))
+                canonPorCodigo[cod] = ($"{cod} - {refM.RazonSocial.Trim()}", refM.Pais?.Trim() ?? "");
+            else
+            {
+                var nom = mejorNombre[cod];
+                canonPorCodigo[cod] = (nom.Length > 0 ? $"{cod} - {nom}" : cod, "");
+            }
+        }
+
+        var map = new Dictionary<string, (string Nombre, string Pais)>(StringComparer.OrdinalIgnoreCase);
+        foreach (var v in distintos)
+        {
+            var cod = CodigoDe(v);
+            if (cod != "" && canonPorCodigo.TryGetValue(cod, out var canon))
+                map[v] = canon;
+            else
+            {
+                // Sin código: intentar coincidencia exacta por RazonSocial en el maestro
+                var refByName = porCodigo.Values.FirstOrDefault(s =>
+                    string.Equals(s.RazonSocial?.Trim(), v, StringComparison.OrdinalIgnoreCase));
+                map[v] = refByName != null
+                    ? ($"{refByName.Sociedad.Trim()} - {refByName.RazonSocial.Trim()}", refByName.Pais?.Trim() ?? "")
+                    : (v, string.Empty);
+            }
+        }
+        return map;
+    }
 }
+
+// Bucket auxiliar para acumular horas y preservar proyecto_sociedad_fi por (Proyecto, Año, Mes)
+file record HorasBucket(decimal Horas, string Sociedad);

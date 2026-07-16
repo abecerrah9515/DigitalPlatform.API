@@ -12,4 +12,7 @@ public class ProyectoFiltroDto
     public int[]? Mes { get; set; }
     public int Pagina { get; set; } = 1;
     public int TamañoPagina { get; set; } = 10;
+
+    // Consolidación a consultar (null = la más reciente).
+    public int? ConsolidacionId { get; set; }
 }

@@ -20,6 +20,9 @@ public class ApplicationDbContext : DbContext
     public DbSet<DepartamentoFinanzas> DepartamentosFinanzas => Set<DepartamentoFinanzas>();
     public DbSet<ContactoCliente> ContactosClientes => Set<ContactoCliente>();
     public DbSet<ComentarioFactura> ComentariosFacturas => Set<ComentarioFactura>();
+    public DbSet<PlanVerticalP26> PlanesVerticalP26 => Set<PlanVerticalP26>();
+    public DbSet<CuentaPnl> CuentasPnl => Set<CuentaPnl>();
+    public DbSet<MovimientoGR55> MovimientosGR55 => Set<MovimientoGR55>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -194,6 +197,49 @@ public class ApplicationDbContext : DbContext
                   .HasForeignKey(e => e.CargaArchivoId)
                   .OnDelete(DeleteBehavior.Cascade);
             entity.HasIndex(e => new { e.CargaArchivoId, e.FacturaId });
+        });
+
+        modelBuilder.Entity<PlanVerticalP26>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Vertical).HasMaxLength(100);
+            entity.Property(e => e.IngresoPlan).HasPrecision(18, 2);
+            entity.Property(e => e.CostoPlan).HasPrecision(18, 2);
+            entity.HasIndex(e => new { e.ConsolidacionId, e.Vertical, e.Año, e.Mes });
+            entity.HasOne(e => e.Consolidacion)
+                  .WithMany()
+                  .HasForeignKey(e => e.ConsolidacionId)
+                  .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<CuentaPnl>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.LineItemId).HasMaxLength(60);
+            entity.Property(e => e.AccountName).HasMaxLength(300);
+            entity.Property(e => e.ParentId).HasMaxLength(60);
+            entity.Property(e => e.TipoFinanciero).HasMaxLength(30);
+            entity.Property(e => e.Referencia).HasColumnType("text");
+            entity.HasIndex(e => new { e.ConsolidacionId, e.ParentId });
+            entity.HasOne(e => e.Consolidacion)
+                  .WithMany()
+                  .HasForeignKey(e => e.ConsolidacionId)
+                  .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<MovimientoGR55>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.NumeroCuenta).HasMaxLength(60);
+            entity.Property(e => e.CodProyecto).HasMaxLength(100);
+            entity.Property(e => e.Cliente).HasMaxLength(200);
+            entity.Property(e => e.Vertical).HasMaxLength(100);
+            entity.Property(e => e.Valor).HasPrecision(18, 2);
+            entity.HasIndex(e => new { e.ConsolidacionId, e.NumeroCuenta, e.Año, e.Mes });
+            entity.HasOne(e => e.Consolidacion)
+                  .WithMany()
+                  .HasForeignKey(e => e.ConsolidacionId)
+                  .OnDelete(DeleteBehavior.Cascade);
         });
     }
 }

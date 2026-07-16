@@ -451,6 +451,54 @@ namespace DigitalPlatform.Infrastructure.Migrations
                     b.ToTable("ControlFacturas");
                 });
 
+            modelBuilder.Entity("DigitalPlatform.Domain.Entities.CuentaPnl", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("AccountName")
+                        .IsRequired()
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)");
+
+                    b.Property<int>("ConsolidacionId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("LineItemId")
+                        .IsRequired()
+                        .HasMaxLength(60)
+                        .HasColumnType("character varying(60)");
+
+                    b.Property<int>("Nivel")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("Orden")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("ParentId")
+                        .IsRequired()
+                        .HasMaxLength(60)
+                        .HasColumnType("character varying(60)");
+
+                    b.Property<string>("Referencia")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("TipoFinanciero")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ConsolidacionId", "ParentId");
+
+                    b.ToTable("CuentasPnl");
+                });
+
             modelBuilder.Entity("DigitalPlatform.Domain.Entities.DepartamentoFinanzas", b =>
                 {
                     b.Property<int>("Id")
@@ -535,6 +583,91 @@ namespace DigitalPlatform.Infrastructure.Migrations
                     b.HasKey("Id");
 
                     b.ToTable("Industrias");
+                });
+
+            modelBuilder.Entity("DigitalPlatform.Domain.Entities.MovimientoGR55", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<int>("Año")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Cliente")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("CodProyecto")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<int>("ConsolidacionId")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("Mes")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("NumeroCuenta")
+                        .IsRequired()
+                        .HasMaxLength(60)
+                        .HasColumnType("character varying(60)");
+
+                    b.Property<decimal>("Valor")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<string>("Vertical")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ConsolidacionId", "NumeroCuenta", "Año", "Mes");
+
+                    b.ToTable("MovimientosGR55");
+                });
+
+            modelBuilder.Entity("DigitalPlatform.Domain.Entities.PlanVerticalP26", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<int>("Año")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("ConsolidacionId")
+                        .HasColumnType("integer");
+
+                    b.Property<decimal>("CostoPlan")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<decimal>("IngresoPlan")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<int>("Mes")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Vertical")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ConsolidacionId", "Vertical", "Año", "Mes");
+
+                    b.ToTable("PlanesVerticalP26");
                 });
 
             modelBuilder.Entity("DigitalPlatform.Domain.Entities.Proyecto", b =>
@@ -848,6 +981,39 @@ namespace DigitalPlatform.Infrastructure.Migrations
                         .IsRequired();
 
                     b.Navigation("CargaArchivo");
+                });
+
+            modelBuilder.Entity("DigitalPlatform.Domain.Entities.CuentaPnl", b =>
+                {
+                    b.HasOne("DigitalPlatform.Domain.Entities.ConsolidacionLog", "Consolidacion")
+                        .WithMany()
+                        .HasForeignKey("ConsolidacionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Consolidacion");
+                });
+
+            modelBuilder.Entity("DigitalPlatform.Domain.Entities.MovimientoGR55", b =>
+                {
+                    b.HasOne("DigitalPlatform.Domain.Entities.ConsolidacionLog", "Consolidacion")
+                        .WithMany()
+                        .HasForeignKey("ConsolidacionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Consolidacion");
+                });
+
+            modelBuilder.Entity("DigitalPlatform.Domain.Entities.PlanVerticalP26", b =>
+                {
+                    b.HasOne("DigitalPlatform.Domain.Entities.ConsolidacionLog", "Consolidacion")
+                        .WithMany()
+                        .HasForeignKey("ConsolidacionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Consolidacion");
                 });
 
             modelBuilder.Entity("DigitalPlatform.Domain.Entities.Proyecto", b =>
